@@ -1,0 +1,56 @@
+/* ==========================================================================
+   FILE: css/components.css
+   FUNGSI: Sentralisasi CSS Kinetik, Overrides Peta, dan Animasi
+   ========================================================================== */
+
+/* --- RESTORASI ANIMASI LOGIN (CYBER RING) --- */
+@keyframes spin-slow { 100% { transform: rotate(360deg); } }
+@keyframes spin-reverse { 100% { transform: rotate(-360deg); } }
+@keyframes breathe-sharp { 0%, 100% { transform: scale(1); opacity: 0.9; } 50% { transform: scale(1.05); opacity: 1; } }
+
+.ring-blue { border: 2px solid transparent; border-top: 2px solid rgba(59, 130, 246, 0.85); border-right: 2px solid rgba(59, 130, 246, 0.85); animation: spin-slow 8s linear infinite; }
+.ring-emerald { border: 2px solid transparent; border-bottom: 2px solid rgba(16, 185, 129, 0.85); border-left: 2px solid rgba(16, 185, 129, 0.85); animation: spin-reverse 6s linear infinite; }
+.ring-red { border: 2px solid transparent; border-top: 2px solid rgba(239, 68, 68, 0.85); border-left: 2px solid rgba(239, 68, 68, 0.85); animation: spin-slow 12s linear infinite; }
+.logo-breathe { animation: breathe-sharp 4s ease-in-out infinite; }
+
+/* 1. TEMA MALAM (Default) Peta Leaflet */
+body:not(.theme-light) .leaflet-layer { filter: invert(95%) hue-rotate(205deg) brightness(115%) contrast(110%) sepia(20%) saturate(1.2) !important; }
+
+/* 2. TEMA SIANG Peta Leaflet */
+body.theme-light .leaflet-layer { filter: brightness(1.03) contrast(1.15) saturate(0.4) hue-rotate(10deg) !important; }
+
+/* 3. Z-INDEX MUTLAK (Membebaskan Tombol Peta) */
+.header-container, header, [id*="header"], .btn-database, .fa-bars, .fa-server { position: relative !important; z-index: 9999999 !important; pointer-events: auto !important; }
+.telemetry-panel-container { position: fixed !important; z-index: 9999999 !important; }
+#btn-telemetry-hud, .top-right-controls { position: fixed !important; top: 24px !important; right: 16px !important; z-index: 9999999 !important; pointer-events: auto !important; cursor: pointer !important; }
+.leaflet-top, .leaflet-bottom, .leaflet-control-container { z-index: 400 !important; pointer-events: none !important; }
+
+/* 4. PENAJAMAN PANEL UI (MODE SIANG) */
+body.theme-light .panel-overlay .panel-card { background: rgba(15, 23, 42, 0.85) !important; backdrop-filter: blur(16px) !important; -webkit-backdrop-filter: blur(16px) !important; border: 1px solid rgba(255, 255, 255, 0.15) !important; box-shadow: 0 15px 35px rgba(0,0,0,0.5) !important; color: #f3f4f6 !important; }
+body.theme-light .panel-overlay .panel-card h3, body.theme-light .panel-overlay .panel-card span, body.theme-light .panel-overlay .panel-card input { color: #f3f4f6 !important; }
+body.theme-light .panel-overlay .panel-card .text-theme-gold { color: #d97706 !important; }
+body.theme-light .panel-overlay .panel-card .text-green-500 { color: #10b981 !important; }
+body.theme-light .panel-overlay .panel-card .text-gray-400, body.theme-light .panel-overlay .panel-card .text-gray-500 { color: #9ca3af !important; }
+body.theme-light .panel-overlay .panel-card .bg-gray-100, body.theme-light .panel-overlay .panel-card .bg-white, body.theme-light .panel-overlay .panel-card .bg-black\/20, body.theme-light .panel-overlay .panel-card .input-wrapper, body.theme-light .panel-overlay .panel-card input { background-color: rgba(15, 23, 42, 0.7) !important; border-color: rgba(255, 255, 255, 0.2) !important; color: #f3f4f6 !important; }
+body.theme-light .panel-overlay .panel-card input:focus { background-color: rgba(0, 0, 0, 0.9) !important; border-color: #d97706 !important; outline: none !important; box-shadow: 0 0 10px rgba(217, 119, 6, 0.4) !important; }
+body.theme-light .panel-overlay .panel-card input:disabled { -webkit-text-fill-color: #9ca3af !important; background-color: rgba(0, 0, 0, 0.3) !important; opacity: 1 !important; }
+body.theme-light .panel-overlay .panel-card .btn-logout { background-color: rgba(220, 38, 38, 0.15) !important; border-color: rgba(220, 38, 38, 0.4) !important; color: #f87171 !important; -webkit-text-fill-color: #f87171 !important; }
+
+/* 5. GEOFENCING RADIUS GLASS EFFECT (DYNAMIC VALIDATION) */
+/* Mode Malam: Biru Terang (Safe) vs Merah Padam (Danger) */
+.standby-glass-radius-night-safe { backdrop-filter: blur(6px) brightness(85%); -webkit-backdrop-filter: blur(6px) brightness(85%); transition: all 0.3s ease; }
+.standby-glass-radius-night-danger { backdrop-filter: blur(8px) brightness(60%) sepia(60%) hue-rotate(-50deg) saturate(400%); -webkit-backdrop-filter: blur(8px) brightness(60%) sepia(60%) hue-rotate(-50deg) saturate(400%); transition: all 0.3s ease; }
+
+/* Mode Siang: Kuning Oranye (Safe) vs Merah Terang (Danger) */
+.standby-glass-radius-day-safe { backdrop-filter: blur(4px) saturate(120%); -webkit-backdrop-filter: blur(4px) saturate(120%); transition: all 0.3s ease; }
+.standby-glass-radius-day-danger { backdrop-filter: blur(6px) saturate(200%) contrast(130%) sepia(30%) hue-rotate(-10deg); -webkit-backdrop-filter: blur(6px) saturate(200%) contrast(130%) sepia(30%) hue-rotate(-10deg); transition: all 0.3s ease; }
+
+/* 6. ANIMASI MODAL & POPUP KINETIK */
+@keyframes popIn { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+
+/* 7. KINETIK AUTO-HIDE (TOMBOL POWER & RECENTER) */
+.btn-auto-hide {
+    opacity: 0 !important;
+    transform: translateY(120px) scale(0.8) !important;
+    pointer-events: none !important;
+}
