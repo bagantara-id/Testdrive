@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Bagantara | Driver</title>
+    
+    <link rel="manifest" href="./manifest.json">
+    <meta name="theme-color" content="#0a1128">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="./assets/icon-192.png">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/components.css">
+    <link rel="stylesheet" href="css/hud-style.css">
+    <link rel="stylesheet" href="chat/theme-chat.css">
+</head>
+<body class="bg-theme-base text-white overflow-hidden font-sans h-[100dvh] w-screen relative">
+
+    <!-- PORTAL LOGIN -->
+    <div id="state-login" class="absolute inset-0 flex flex-col items-center justify-center z-50 transition-opacity duration-500 bg-cover bg-center" style="background-image: url('https://res.cloudinary.com/wuw7hvjo/image/upload/v1790754115/ae6y0m8oxslbg134jkvg.jpg'); background-color: #030712;">
+        <div class="relative w-[90%] max-w-md bg-gray-800/60 backdrop-blur-xl border border-white/20 rounded-[2rem] p-8 flex flex-col items-center shadow-2xl">
+            <div class="relative w-48 h-48 mb-8 flex items-center justify-center rounded-full">
+                <div class="ring-blue absolute inset-0 rounded-full"></div>
+                <div class="ring-emerald absolute inset-3 rounded-full"></div>
+                <div class="ring-red absolute inset-6 rounded-full"></div>
+                <div class="absolute inset-0 flex items-center justify-center z-10">
+                    <img src="./assets/logo.png" alt="Bagantara VIP" class="w-20 h-20 object-contain logo-breathe">
+                </div>
+            </div>
+            <div class="text-center mb-10">
+                <h1 class="font-bold text-theme-gold text-2xl tracking-[0.25em] mb-2 font-display">BAGANTARA</h1>
+                <p class="text-[0.7rem] tracking-[0.35em] font-bold uppercase bg-gradient-to-r from-slate-400 via-slate-100 to-slate-400 text-transparent bg-clip-text drop-shadow-sm" id="login-subtitle">Driver Portal</p>
+            </div>
+            <div class="flex flex-col items-center w-full gap-4">
+                <button type="button" id="btnBioLogin" class="btn-primary w-full flex items-center justify-center gap-3 hidden-state" style="background: rgba(15, 23, 42, 0.85); color: white; border-color: rgba(255,255,255,0.2);">
+                    <i class="fa-solid fa-fingerprint text-theme-gold text-lg"></i> MASUK DENGAN BIOMETRIK
+                </button>
+                <button type="button" id="btnGoogleLogin" class="btn-google-material w-full flex items-center justify-center gap-3">
+                    <i class="fa-brands fa-google"></i> <span class="tracking-wide text-[0.9rem]">Lanjutkan dengan Google</span>
+                </button>
+                <button type="button" id="btn-force-logout" class="text-[0.65rem] text-red-400 mt-2 tracking-wider hidden-state uppercase font-bold">Ganti Akun Google</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PENOLAKAN & REGISTRASI -->
+    <div id="state-rejected" class="hidden-state absolute inset-0 flex flex-col items-center justify-center z-50 bg-theme-base/95 backdrop-blur-md p-6">
+        <h2 class="text-lg font-bold text-white mb-2 font-display">Akses Ditolak</h2>
+        <button id="btn-back-login" class="text-xs text-gray-500 uppercase py-2">Kembali ke Login</button>
+    </div>
+
+    <div id="state-registration" class="hidden-state absolute inset-0 flex flex-col items-center justify-center z-40 bg-theme-base p-4">
+        <div class="panel-card w-full max-w-md">
+            <h2 class="text-lg font-bold text-theme-gold mb-4 border-b border-white/10 pb-3 font-display"><i class="fa-solid fa-address-card"></i> Profil Pengemudi</h2>
+            <div id="reg-status-alert" class="mb-5 p-3 rounded-lg text-[0.8rem] text-center border"></div>
+            <div class="space-y-3">
+                <input type="email" id="reg-email" class="input-field" disabled>
+                <select id="reg-kategori" class="input-field"><option value="Motor">Motor</option><option value="Mobil">Mobil</option></select>
+                <input type="text" id="reg-nama" class="input-field" placeholder="Nama Lengkap">
+                <input type="text" id="reg-plat" class="input-field uppercase" placeholder="B 1234 CD">
+                <input type="number" id="reg-wa" class="input-field" placeholder="628...">
+                <input type="text" id="reg-kendaraan" class="input-field" placeholder="Merek Kendaraan">
+                <button id="btn-submit-reg" class="btn-primary w-full mt-4"><i class="fa-solid fa-floppy-disk"></i> Simpan Profil</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- DASHBOARD PETA -->
+    <div id="state-dashboard" class="hidden-state absolute inset-0 z-10 w-full h-full flex flex-col">
+        <div id="map" class="absolute inset-0 z-0 w-full h-full bg-gray-900"></div>
+        <div class="absolute top-0 left-0 w-full h-24 bg-gradient-to-b from-theme-base/80 to-transparent z-10 pointer-events-none"></div>
+
+        <!-- Status & HUD -->
+        <div class="absolute top-6 left-1/2 -translate-x-1/2 z-20 pointer-events-none flex flex-col items-center">
+            <div id="status-badge" class="bg-theme-base/90 backdrop-blur-md border border-gray-600 px-4 py-1.5 rounded-full shadow-lg">
+                <span id="status-text" class="text-[0.65rem] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-gray-500"></span> OFFLINE
+                </span>
+            </div>
+        </div>
+        <button id="btn-telemetry-hud" class="z-20 w-10 h-10 rounded-full bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center text-theme-gold hover:text-green-400 shadow-lg pointer-events-auto cursor-pointer">
+            <i class="fa-solid fa-server text-sm pointer-events-none"></i>
+        </button>
+
+        <div id="telemetry-panel-container" class="telemetry-panel-container">
+            <div id="hud-panel-aktif" class="hidden-state">
+                <div class="telemetry-card telemetry-card-green mb-2">
+                    <div class="telemetry-icon-ring"><i class="fa-solid fa-satellite-dish"></i></div>
+                    <div class="telemetry-content">
+                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                            <span class="telemetry-label">KONEKSI APLIKASI</span>
+                            <span id="tx-metronome" style="font-family: 'Space Mono', monospace; font-size: 0.55rem; font-weight: 800; color: #9ca3af;">[ TX: --s ]</span>
+                        </div>
+                        <span class="telemetry-status-text"><div id="led-koneksi" class="indicator-dot indicator-gray"></div><span id="teks-koneksi">MENCARI...</span></span>
+                        <span id="teks-update-terakhir" class="telemetry-subtext">Update: --:--:-- WIB</span>
+                    </div>
+                    <button class="telemetry-btn-action" id="btn-close-hud-aktif"><i class="fa-solid fa-power-off pointer-events-none"></i></button>
+                </div>
+                <div class="telemetry-card telemetry-card-blue">
+                    <div class="telemetry-icon-ring"><i class="fa-solid fa-location-crosshairs"></i></div>
+                    <div class="telemetry-content">
+                        <span class="telemetry-label">SINYAL LOKASI</span>
+                        <span class="telemetry-status-text" id="teks-akurasi" style="font-size:0.75rem;">MENGHITUNG...</span>
+                        <div class="telemetry-divider"></div>
+                        <span class="telemetry-label">STATUS KENDARAAN</span>
+                        <span class="telemetry-status-text" id="teks-pergerakan" style="font-size:0.7rem; color:#f59e0b;">MENUNGGU DATA...</span>
+                    </div>
+                </div>
+            </div>
+            <div id="hud-panel-mangkal" class="hidden-state">
+                <div class="telemetry-card telemetry-card-purple">
+                    <div class="telemetry-icon-ring"><i class="fa-solid fa-anchor"></i></div>
+                    <div class="telemetry-content">
+                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                            <span class="telemetry-label" style="color: #c084fc;">OPERASI MANGKAL</span>
+                            <span id="countdown-mangkal" style="font-family: 'Space Mono', monospace; font-size: 0.75rem; font-weight: 800; color: #a855f7;">00:00:00</span>
+                        </div>
+                        <span class="telemetry-status-text" style="font-size: 0.55rem; margin-top: 2px;" id="teks-target-mangkal">TAR: --.----, --.----</span>
+                        <div class="telemetry-divider"></div>
+                        <span class="telemetry-label">DEVIASI FISIK (MAX 7.0 KM)</span>
+                        <span class="telemetry-status-text" id="teks-deviasi" style="font-size:0.75rem; color:#10b981;">MENGHITUNG JARAK...</span>
+                    </div>
+                    <button class="telemetry-btn-action" id="btn-close-hud-mangkal"><i class="fa-solid fa-power-off pointer-events-none"></i></button>
+                </div>
+            </div>
+        </div>
+
+        <!-- RESTRUKTURISASI TOMBOL KONTROL PETA -->
+        <!-- Tombol Power disiapkan dengan transition-all duration-500 untuk efek Auto-Hide (Tahap 4) -->
+        <button id="btn-power" class="absolute bottom-[80px] left-[20px] z-[9999] w-14 h-14 rounded-full bg-[#030712] text-gray-400 border border-gray-600 flex items-center justify-center transition-all duration-500 shadow-[0_10px_25px_rgba(0,0,0,0.9)] pointer-events-auto cursor-pointer">
+            <i class="fa-solid fa-power-off text-xl pointer-events-none"></i>
+        </button>
+        
+        <!-- Recenter Fisik dinaikkan untuk area aman jari -->
+        <button id="btn-recenter-fisik" class="hidden-state absolute bottom-[200px] right-[20px] z-[9999] w-12 h-12 rounded-full bg-[#1e3a8a]/80 backdrop-blur-md text-[#60a5fa] border border-[#3b82f6]/60 flex items-center justify-center text-xl shadow-[0_4px_15px_rgba(0,0,0,0.3)] pointer-events-auto cursor-pointer transition-all hover:bg-[#1e3a8a]">
+            <i class="fa-solid fa-street-view pointer-events-none"></i>
+        </button>
+
+        <!-- Recenter Utama menjadi Glassmorphism & Naik menjauhi navigasi profil -->
+        <button id="btn-recenter" class="absolute bottom-[135px] right-[20px] z-[9999] w-12 h-12 rounded-full bg-white/10 backdrop-blur-lg text-white border border-white/20 flex items-center justify-center shadow-[0_4px_15px_rgba(0,0,0,0.3)] pointer-events-auto cursor-pointer transition-transform active:scale-90 hover:bg-white/20">
+            <i id="icon-recenter" class="fa-solid fa-location-crosshairs text-lg pointer-events-none drop-shadow-md"></i>
+        </button>
+
+        <!-- KAPSUL TARGET & MANGKAL (DENGAN TACTICAL SLIDER) -->
+        <div id="bgt-targeting-ui" class="hidden-state absolute inset-0 z-[500] pointer-events-none flex flex-col justify-between items-center">
+            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[90%]">
+                <div class="relative flex flex-col items-center">
+                    <img src="./assets/pin_standby.png" class="w-16 h-16 object-contain animate-bounce drop-shadow-xl" alt="Pin">
+                    <div class="w-5 h-1.5 bg-black/60 rounded-[100%] absolute -bottom-1.5 blur-[2px]"></div>
+                </div>
+            </div>
+            
+            <div class="mt-20 bg-black/80 backdrop-blur-md border border-theme-gold/50 px-6 py-2.5 rounded-full shadow-2xl pointer-events-auto">
+                <span class="text-[0.65rem] font-bold text-theme-gold tracking-widest uppercase"><i class="fa-solid fa-arrows-up-down-left-right mr-2"></i>Geser Peta Untuk Target</span>
+            </div>
+            
+            <div class="mb-[90px] w-full max-w-sm px-4 pointer-events-auto flex flex-col gap-4">
+                
+                <!-- INJEKSI TACTICAL SLIDER -->
+                <div class="bg-[rgba(15,23,42,0.85)] backdrop-blur-xl border border-theme-gold/30 p-4 rounded-2xl shadow-2xl flex flex-col gap-3">
+                    <div class="flex justify-between items-center text-[0.65rem] font-bold text-theme-gold tracking-widest uppercase">
+                        <span><i class="fa-solid fa-circle-dot mr-1"></i> Radius Area Layanan</span>
+                        <span id="slider-radius-val" class="text-white text-xs bg-theme-gold/20 px-2 py-0.5 rounded font-mono">7.0 KM</span>
+                    </div>
+                    <!-- Garis Geser Interaktif -->
+                    <input type="range" id="slider-radius" min="1" max="15" value="7" step="0.5" class="w-full h-1.5 bg-gray-600 rounded-lg appearance-none cursor-pointer outline-none slider-tactical">
+                </div>
+
+                <!-- Tombol Eksekusi -->
+                <div class="bg-[rgba(15,23,42,0.85)] backdrop-blur-xl border border-theme-gold/30 p-4 rounded-2xl shadow-2xl flex gap-3">
+                    <button id="btn-cancel-target" class="flex-1 bg-[rgba(153,27,27,0.15)] border border-[rgba(220,38,38,0.6)] text-[#f87171] rounded-xl py-3.5 text-xs font-bold uppercase active:scale-95 transition-all cursor-pointer shadow-[0_4px_10px_rgba(0,0,0,0.3)]">BATAL</button>
+                    <button id="btn-lock-target" class="flex-[2] bg-gradient-to-r from-theme-gold/40 to-theme-gold/10 border border-theme-gold/50 text-theme-gold rounded-xl py-3.5 text-xs font-bold uppercase active:scale-95 transition-all cursor-pointer shadow-[0_4px_10px_rgba(0,0,0,0.3)]"><i class="fa-solid fa-lock mr-2"></i> KUNCI MANGKAL</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="bgt-micro-capsule" class="hidden-state absolute bottom-[160px] left-1/2 -translate-x-1/2 z-[1050] transition-all duration-300 ease-out pointer-events-auto">
+            <div class="bg-[rgba(3,7,18,0.85)] backdrop-blur-xl border border-white/20 p-2.5 rounded-[2rem] shadow-[0_15px_40px_rgba(0,0,0,0.9)] flex flex-col gap-3 overflow-hidden w-max">
+                <div class="flex gap-2 items-center">
+                    <button id="btn-cap-aktif" class="btn-cap-mode bg-[#10b981] text-white border border-emerald-400/50 rounded-full px-6 py-3 text-[0.7rem] font-bold uppercase shrink-0 cursor-pointer"><i class="fa-solid fa-satellite-dish"></i> Aktif</button>
+                    <button id="btn-cap-mangkal" class="btn-cap-mode bg-[#0f172a] text-blue-300 border border-blue-500/50 rounded-full px-6 py-3 text-[0.7rem] font-bold uppercase shrink-0 cursor-pointer"><i class="fa-solid fa-anchor"></i> Mangkal</button>
+                    <button id="btn-cap-close" class="bg-red-500/20 text-red-400 border border-red-500/50 rounded-full w-10 h-10 flex justify-center items-center text-sm shrink-0 cursor-pointer"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div id="cap-durations" class="hidden gap-2 items-center px-2 pb-1 transition-all">
+                    <span class="text-[0.65rem] text-gray-400 font-bold tracking-widest mr-1 shrink-0">DURASI:</span>
+                    <button class="cap-dur-btn bg-[#0f172a] text-blue-300 border border-blue-500/30 rounded-full w-14 h-11 flex justify-center items-center text-xs font-bold shrink-0 cursor-pointer" data-val="1">1J</button>
+                    <button class="cap-dur-btn bg-[#0f172a] text-blue-300 border border-blue-500/30 rounded-full w-14 h-11 flex justify-center items-center text-xs font-bold shrink-0 cursor-pointer" data-val="6">6J</button>
+                    <button class="cap-dur-btn bg-[#0f172a] text-blue-300 border border-blue-500/30 rounded-full w-14 h-11 flex justify-center items-center text-xs font-bold shrink-0 cursor-pointer" data-val="12">12J</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PEMBERSIHAN PANEL OPERASIONAL -->
+        <div id="panel-ops" class="panel-overlay hidden-state absolute bottom-[70px] left-4 right-4 z-[9999] max-h-[60vh] overflow-y-auto pointer-events-auto">
+            <div class="panel-card w-full">
+                <div class="flex justify-between items-center border-b border-white/10 pb-3 mb-4">
+                    <h3 class="text-sm font-bold uppercase tracking-widest"><i class="fa-solid fa-sliders text-theme-gold"></i> Operasional</h3>
+                    <button class="btn-close-panel text-gray-400 cursor-pointer"><i class="fa-solid fa-xmark text-lg"></i></button>
+                </div>
+                <div class="space-y-3">
+                    <div class="input-wrapper smart-field-container">
+                        <i class="fa-solid fa-comment-dots input-icon"></i>
+                        <input type="text" id="dash-info" class="input-field smart-input smart-locked" placeholder="Agenda Publik" disabled>
+                        <button class="smart-btn-toggle"><i class="fa-solid fa-lock"></i></button>
+                    </div>
+                    
+                    <div class="border border-white/10 rounded-lg p-3 bg-black/20">
+                        <span class="text-[0.65rem] text-gray-400 uppercase font-bold mb-3 block border-b border-white/5 pb-2 tracking-wider">Layanan Aktif</span>
+                        <div id="layanan-options-container" class="flex flex-col gap-3"></div>
+                    </div>
+
+                    <!-- Kolom Jarak/Radius Dicabut. Kini Tarif mengisi lebar penuh (w-full) -->
+                    <div class="input-wrapper smart-field-container w-full">
+                        <i class="fa-solid fa-coins input-icon"></i>
+                        <input type="number" id="dash-tarif" class="input-field smart-input smart-locked" placeholder="Tarif Min (Rp)" disabled>
+                        <button class="smart-btn-toggle"><i class="fa-solid fa-lock"></i></button>
+                    </div>
+                    
+                    <button id="btn-save-settings" class="btn-primary w-full mt-2 text-sm flex justify-center items-center gap-2 transition-all cursor-pointer">
+                        <i class="fa-solid fa-cloud-arrow-up"></i> SIMPAN PENGATURAN
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PANEL PROFIL -->
+        <div id="panel-profil" class="panel-overlay hidden-state absolute bottom-[70px] left-4 right-4 z-[9999] max-h-[70vh] overflow-y-auto pointer-events-auto">
+            <div class="panel-card w-full">
+                <div class="flex justify-between items-center border-b border-white/10 pb-3 mb-4">
+                    <h3 class="text-sm font-bold uppercase tracking-widest"><i class="fa-solid fa-user-astronaut text-theme-gold"></i> Profil Saya</h3>
+                    <button class="btn-close-panel text-gray-400 cursor-pointer"><i class="fa-solid fa-xmark text-lg"></i></button>
+                </div>
+                
+                <div class="flex flex-col items-center mb-4 relative">
+                    <img id="profile-photo-preview" src="https://ui-avatars.com/api/?name=Driver&background=c5a880&color=fff" class="w-20 h-20 rounded-full border-2 border-theme-gold object-cover mb-2 shadow-lg" alt="Foto">
+                    <span class="text-[0.65rem] text-gray-400 tracking-widest uppercase flex items-center gap-1"><i class="fa-solid fa-shield-check text-green-500"></i> Terverifikasi</span>
+                    <button id="btnThemeToggle" class="absolute top-0 right-0 w-8 h-8 rounded-full bg-black/30 border border-white/10 text-gray-400 cursor-pointer"><i class="fa-solid fa-moon" id="iconTheme"></i></button>
+                </div>
+
+                <div class="space-y-3 mb-4">
+                    <div class="bg-black/20 p-3 rounded-xl border border-white/5">
+                        <span class="text-[0.65rem] text-gray-500 font-bold uppercase tracking-widest block mb-1">Nama Pengemudi</span>
+                        <span id="lock-nama" class="text-sm font-bold text-white tracking-wide"></span>
+                    </div>
+
+                    <div class="border border-white/10 rounded-lg p-3 bg-black/20">
+                        <span class="text-[0.65rem] text-gray-400 uppercase font-bold mb-3 block border-b border-white/5 pb-2">Kendaraan & Kontak</span>
+                        <div class="input-wrapper smart-field-container">
+                            <i class="fa-solid fa-car input-icon"></i>
+                            <input type="text" id="lock-kendaraan" class="input-field smart-input smart-locked" disabled>
+                            <button class="smart-btn-toggle"><i class="fa-solid fa-lock"></i></button>
+                        </div>
+                        <div class="flex gap-3">
+                            <div class="input-wrapper smart-field-container w-1/2">
+                                <i class="fa-solid fa-hashtag input-icon"></i>
+                                <input type="text" id="lock-plat" class="input-field smart-input smart-locked uppercase" disabled>
+                                <button class="smart-btn-toggle"><i class="fa-solid fa-lock"></i></button>
+                            </div>
+                            <div class="input-wrapper smart-field-container w-1/2">
+                                <i class="fa-brands fa-whatsapp input-icon"></i>
+                                <input type="number" id="lock-wa" class="input-field smart-input smart-locked" disabled>
+                                <button class="smart-btn-toggle"><i class="fa-solid fa-lock"></i></button>
+                            </div>
+                        </div>
+                        <button id="btn-save-profile" class="btn-primary w-full mt-2 text-sm flex justify-center items-center gap-2 transition-all cursor-pointer">
+                            <i class="fa-solid fa-cloud-arrow-up"></i> SIMPAN PROFIL
+                        </button>
+                    </div>
+
+                    <div class="border border-white/10 rounded-lg p-3 bg-black/20 flex justify-between items-center">
+                        <div class="flex flex-col">
+                            <span class="text-sm font-bold text-white uppercase"><i class="fa-solid fa-fingerprint text-theme-gold mr-1"></i> Gembok Layar</span>
+                            <span class="text-[0.6rem] text-gray-400 mt-0.5">Biometrik Wajah/Jari</span>
+                        </div>
+                        <label class="bgt-toggle-label">
+                            <input type="checkbox" id="toggle-biometrik" class="bgt-toggle-input">
+                            <div class="bgt-toggle-track"></div>
+                        </label>
+                    </div>
+                </div>
+
+                <button class="btn-logout w-full bg-red-500/10 text-red-500 border border-red-500/30 rounded-xl py-3 text-sm font-bold uppercase tracking-wider flex justify-center items-center gap-2 cursor-pointer">
+                    <i class="fa-solid fa-power-off"></i> KELUAR AKUN
+                </button>
+            </div>
+        </div>
+
+        <div class="absolute bottom-0 left-0 right-0 h-16 bg-theme-base/95 backdrop-blur-xl border-t border-white/10 flex justify-around items-center z-[10000] pb-safe pointer-events-auto">
+            <button class="nav-btn active flex flex-col items-center gap-1 text-theme-gold cursor-pointer" data-target="map-only"><i class="fa-solid fa-map-location-dot text-xl pointer-events-none"></i><span class="text-[0.6rem] font-bold uppercase pointer-events-none">Peta</span></button>
+            <button class="nav-btn flex flex-col items-center gap-1 text-gray-500 cursor-pointer" data-target="panel-ops"><i class="fa-solid fa-sliders text-xl pointer-events-none"></i><span class="text-[0.6rem] font-bold uppercase pointer-events-none">Operasi</span></button>
+            <button id="btn-buka-chat" class="flex flex-col items-center gap-1 text-gray-500 hover:text-theme-gold cursor-pointer">
+                <div class="relative pointer-events-none"><i class="fa-solid fa-message text-xl"></i><span id="chat-notif-dot" class="hidden-state absolute -top-1 -right-1 flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span></div>
+                <span class="text-[0.6rem] font-bold uppercase tracking-widest pointer-events-none">Pesan</span>
+            </button>
+            <button class="nav-btn flex flex-col items-center gap-1 text-gray-500 cursor-pointer" data-target="panel-profil"><i class="fa-solid fa-user text-xl pointer-events-none"></i><span class="text-[0.6rem] font-bold uppercase pointer-events-none">Profil</span></button>
+        </div>
+    </div>
+
+    <!-- CANGKANG STATIS (MODAL & CHAT) -->
+    <div id="app-modal" class="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 backdrop-blur-sm hidden-state opacity-0 transition-opacity duration-300 pointer-events-auto">
+        <div class="panel-card max-w-xs w-full mx-4 p-6 text-center scale-95 transition-transform duration-300" id="app-modal-box">
+            <div id="app-modal-icon" class="text-4xl mb-3 text-theme-gold"><i class="fa-solid fa-circle-info"></i></div>
+            <h3 id="app-modal-title" class="font-bold text-lg mb-2 text-white font-display">PEMBERITAHUAN</h3>
+            <p id="app-modal-msg" class="text-sm text-gray-400 mb-6 leading-relaxed"></p>
+            <button id="btn-close-modal" class="btn-primary w-full text-sm cursor-pointer">Mengerti</button>
+        </div>
+    </div>
+
+    <div id="panel-handshake" class="hidden-state fixed inset-0 z-[99990] flex flex-col justify-center items-center p-5 pointer-events-auto" style="background: rgba(248,250,252,0.75); backdrop-filter: blur(10px);">
+        <div class="bg-white border border-black/5 rounded-[24px] p-6 w-full max-w-[340px] shadow-[0_15px_40px_rgba(0,0,0,0.08)] text-center animate-[popIn_0.3s_cubic-bezier(0.175,0.885,0.32,1.275)]">
+            <div class="w-16 h-16 bg-slate-900/5 rounded-full flex justify-center items-center text-slate-900 text-3xl mx-auto mb-4"><i class="fa-solid fa-handshake"></i></div>
+            <h2 class="font-display text-slate-800 text-xl font-bold mb-1">Tawaran Masuk</h2>
+            <p id="handshake-info" class="text-slate-500 text-xs mb-5 font-semibold">Jarak: -- KM | Layanan: --</p>
+            <div class="bg-slate-50 rounded-xl p-4 mb-6 border border-dashed border-black/10"><span id="handshake-price" class="block text-slate-900 font-mono text-3xl font-extrabold">Rp 0</span></div>
+            <div class="flex gap-3">
+                <button id="btn-tolak-tiket" class="flex-1 bg-red-500/10 text-red-500 border border-red-500/20 py-3.5 rounded-xl font-extrabold text-xs active:scale-95 transition-transform cursor-pointer">TOLAK</button>
+                <button id="btn-terima-tiket" class="flex-1 bg-slate-900 text-white py-3.5 rounded-xl font-extrabold text-xs shadow-lg active:scale-95 transition-transform cursor-pointer">TERIMA</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="panel-komunikasi-utama" class="hidden-state pointer-events-auto z-[99995]">
+        <div class="chat-header">
+            <div style="display:flex; align-items:center; gap:8px;"><i class="fa-solid fa-shield-halved" style="color:#ceab6b;"></i><h3 id="chat-session-title" style="margin:0; font-size:0.9rem; font-weight:bold; color:#f8fafc;">SESI: --------</h3></div>
+            <button id="chat-btn-tutup" style="background:none; border:none; color:#f8fafc; font-size:1.2rem; cursor:pointer;"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div id="chat-body" class="chat-body">
+            <div style="text-align:center; font-size:0.65rem; color:#64748b; margin:10px 0;">Sesi Privat & Terenkripsi. Otomatis Dihapus.</div>
+        </div>
+        <div class="chat-footer">
+            <input type="file" id="input-kamera" accept="image/*" capture="environment" style="display:none;">
+            <input type="file" id="input-galeri" accept="image/*" style="display:none;">
+            <div id="menu-alat-ekspansi" class="chat-tools-hidden">
+                <button id="tool-kamera" class="tool-btn-sm"><i class="fa-solid fa-camera"></i> Kamera</button>
+                <button id="tool-galeri" class="tool-btn-sm"><i class="fa-solid fa-images"></i> Galeri</button>
+                <button id="tool-lokasi" class="tool-btn-sm"><i class="fa-solid fa-location-dot"></i> Lokasi</button>
+            </div>
+            <div class="chat-input-row">
+                <button id="btn-toggle-tools" class="btn-action-plus cursor-pointer"><i class="fa-solid fa-paperclip"></i></button>
+                <input type="text" id="chat-teks" class="chat-input" placeholder="Ketik pesan...">
+                <button id="tool-audio" class="btn-mic cursor-pointer"><i class="fa-solid fa-microphone"></i></button>
+                <button id="chat-btn-send" class="btn-send hidden-state cursor-pointer"><i class="fa-solid fa-paper-plane"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-fullscreen-img" class="hidden-state fixed inset-0 z-[99999] bg-black/95 flex justify-center items-center opacity-0 transition-opacity duration-300">
+        <div id="btn-tutup-modal-img" class="absolute top-5 right-5 text-white text-2xl z-[10001] cursor-pointer p-2"><i class="fa-solid fa-xmark"></i></div>
+        <div class="relative max-w-[95vw] max-h-[90vh]">
+            <img id="fullscreen-img-target" src="" class="max-w-full max-h-[90vh] object-contain block pointer-events-none select-none">
+            <div class="absolute inset-0 z-[10000]" oncontextmenu="return false;"></div>
+        </div>
+    </div>
+
+    <div id="bottom-sheet-forensik" class="hidden-state fixed inset-0 z-[99999] bg-black/50 backdrop-blur-sm flex flex-col justify-end opacity-0 transition-opacity duration-300">
+        <div id="bs-backdrop" class="flex-1"></div>
+        <div id="bs-content" class="bg-[#0f1624] rounded-t-[20px] p-5 pb-safe border-t border-[#ceab6b] translate-y-full transition-transform duration-300 cubic-bezier(0.175, 0.885, 0.32, 1)">
+            <div class="w-10 h-1 bg-[#ceab6b]/50 rounded-full mx-auto mb-4"></div>
+            <h3 class="text-[#ceab6b] text-base text-center font-bold mb-4"><i class="fa-solid fa-shield-halved"></i> Metadata Forensik</h3>
+            <div class="bg-[#0b101a] rounded-xl p-3 mb-4 font-mono text-xs text-white border border-white/5 leading-relaxed">
+                <div class="flex justify-between border-b border-white/10 pb-1.5 mb-1.5"><span class="text-[#ceab6b] font-bold">SUMBER</span><b id="fs-sumber" class="text-[#ceab6b] bg-[#ceab6b]/10 px-1.5 rounded">-</b></div>
+                <div class="flex justify-between border-b border-white/10 pb-1.5 mb-1.5"><span class="text-slate-400">IP Upload</span><b id="fs-ip">-</b></div>
+                <div class="flex justify-between border-b border-white/10 pb-1.5 mb-1.5"><span class="text-slate-400">Hardware</span><b id="fs-hardware">-</b></div>
+                <div class="flex justify-between"><span class="text-slate-400">GPS Upload</span><a id="fs-lokasi" href="#" target="_blank" class="text-[#ceab6b] underline font-bold"><i class="fa-solid fa-map-pin"></i> Buka Peta</a></div>
+            </div>
+            <div id="fs-exif-container" class="hidden-state bg-[#ceab6b]/5 rounded-xl p-3 mb-4 font-mono text-[0.7rem] text-white border border-dashed border-[#ceab6b]/30 leading-relaxed">
+                <h4 class="text-[#ceab6b] mb-2 text-xs"><i class="fa-solid fa-camera-retro"></i> Metadata Asli (Galeri)</h4>
+                <div class="flex justify-between border-b border-white/5 pb-1 mb-1"><span class="text-slate-400">Kamera</span><b id="fs-exif-kamera" class="text-right">-</b></div>
+                <div class="flex justify-between border-b border-white/5 pb-1 mb-1"><span class="text-slate-400">Waktu</span><b id="fs-exif-waktu" class="text-right">-</b></div>
+                <div class="flex justify-between"><span class="text-slate-400">GPS Asli</span><span id="fs-exif-gps"></span></div>
+            </div>
+            <button id="btn-bs-salin" class="w-full bg-[#ceab6b] text-[#0b101a] py-3 rounded-xl font-bold text-sm cursor-pointer"><i class="fa-solid fa-copy"></i> Salin Log Lengkap</button>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
