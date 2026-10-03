@@ -1,0 +1,123 @@
+#panel-komunikasi-utama {
+    position: fixed; inset: 0; z-index: 1000;
+    background: #0b101a; 
+    display: flex; flex-direction: column;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    animation: slideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    color: #f8fafc;
+    /* BLOKIR SELEKSI TEKS KESELURUHAN */
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+.chat-header {
+    background: #0f1624;
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(206, 171, 107, 0.2);
+    display: flex; justify-content: space-between; align-items: center;
+}
+
+.chat-body {
+    flex: 1; overflow-y: auto; padding: 12px 16px;
+    display: flex; flex-direction: column; scroll-behavior: smooth;
+    overflow-anchor: auto; /* Mencegah layar lompat saat memuat gambar */
+    contain: content; /* Memblokir CPU untuk tidak memproses elemen yang belum terlihat di layar */
+}
+.chat-body::-webkit-scrollbar { width: 0px; }
+
+.chat-footer {
+    background: #0b101a;
+    padding: 10px 16px; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid rgba(255,255,255,0.05);
+    display: flex; flex-direction: column;
+}
+
+/* ==============================================================
+   GELEMBUNG SUPER KOMPAK & LINIER (Menyesuaikan Teks)
+   ============================================================== */
+.msg-bubble {
+    display: flex; flex-direction: row; align-items: flex-end; gap: 6px;
+    width: fit-content; max-width: 85%;
+    padding: 5px 10px; /* Diperkecil 2x lipat */
+    border-radius: 10px;
+    font-size: 0.85rem; line-height: 1.2;
+    margin-bottom: 4px;
+}
+/* Mematikan jarak bawaan paragraf yang membuat kolom bengkak */
+.msg-content p { margin: 0; padding: 0; word-break: break-word; }
+.msg-time { font-size: 0.6rem; color: rgba(255,255,255,0.4); margin-bottom: -1px; white-space: nowrap; }
+
+.msg-mitra { 
+    align-self: flex-end; background: #0f1624; color: #f8fafc; 
+    border-bottom-right-radius: 2px; 
+    border: 1px solid #ceab6b;
+}
+.msg-klien { 
+    align-self: flex-start; background: #162032; color: #f8fafc; 
+    border-bottom-left-radius: 2px; 
+    border: 1px solid rgba(255,255,255,0.05); 
+}
+
+/* ==============================================================
+   KOLOM TEKS & TOMBOL PREMIUM
+   ============================================================== */
+.chat-input-row { display: flex; align-items: center; gap: 8px; }
+
+/* Desain Ikon Kiri (Mewah & Elegan) */
+.btn-action-plus {
+    background: linear-gradient(135deg, #ceab6b, #937135); 
+    color: #0b101a; 
+    border: none; 
+    width: 38px; height: 38px; 
+    border-radius: 50%; /* Bulat sempurna */
+    display: flex; align-items: center; justify-content: center; 
+    cursor: pointer; font-size: 1.1rem; 
+    box-shadow: 0 2px 10px rgba(206, 171, 107, 0.3); /* Efek cahaya / glow emas */
+    transition: transform 0.3s;
+}
+
+.btn-mic, .btn-send {
+    background: transparent; color: #ceab6b; 
+    border: 1px solid #ceab6b; 
+    width: 38px; height: 38px; 
+    border-radius: 12px; 
+    display: flex; align-items: center; justify-content: center; 
+    cursor: pointer; font-size: 1rem;
+}
+.btn-send { background: #ceab6b; color: #0b101a; border: none; }
+
+.chat-input { 
+    flex: 1; background: #0f1624; 
+    border: 1px solid rgba(206, 171, 107, 0.4); 
+    padding: 8px 16px; border-radius: 20px; 
+    font-size: 0.85rem; color: #f8fafc; outline: none; height: 38px; box-sizing: border-box;
+    /* Pengecualian: Boleh di-klik untuk mengetik */
+    -webkit-user-select: auto;
+    -moz-user-select: auto;
+    -ms-user-select: auto;
+    user-select: auto;
+}
+.chat-input:focus { border-color: #ceab6b; }
+.chat-input::placeholder { color: rgba(255,255,255,0.3); }
+
+.hidden-state { display: none !important; }
+.chat-tools-hidden { 
+    display: flex; gap: 8px; overflow: hidden; max-height: 0; opacity: 0; 
+    transition: all 0.3s ease; margin-bottom: 0;
+}
+.chat-tools-hidden.show-tools { max-height: 40px; opacity: 1; margin-bottom: 10px; }
+.tool-btn-sm { 
+    flex: 1; background: rgba(206, 171, 107, 0.05); border: 1px solid rgba(206, 171, 107, 0.3); 
+    color: #ceab6b; border-radius: 10px; padding: 8px; font-size: 0.7rem; font-weight: 700; 
+    display: flex; justify-content: center; align-items: center; gap: 6px; cursor: pointer; 
+}
+
+/* Efek Hover/Klik Cepat Gambar Chat */
+.image-wrapper {
+    transition: transform 0.2s ease;
+}
+.image-wrapper:active {
+    transform: scale(0.96);
+}
