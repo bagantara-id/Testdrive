@@ -1,0 +1,128 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   TEMA UTAMA (Profesional Navy & Gold)
+   ========================================================================== */
+:root {
+    --theme-base: #0a1128;
+    --theme-panel: rgba(15, 23, 42, 0.85);
+    --theme-gold: #c5a880;
+    --theme-gold-dim: rgba(197, 168, 128, 0.15);
+    --border-color: rgba(255, 255, 255, 0.1);
+}
+
+* { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
+
+body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--theme-base); }
+.font-display { font-family: 'Outfit', sans-serif; }
+.hidden-state { display: none !important; }
+.bg-theme-base { background-color: var(--theme-base); }
+.text-theme-gold { color: var(--theme-gold); }
+.border-theme-gold { border-color: var(--theme-gold); }
+
+/* ESTETIKA LOGIN: NEUMORPHISM 3D RING & METALLIC SWEEP */
+.neumorphic-ring-outer { background: var(--theme-base); box-shadow: 12px 12px 24px rgba(0,0,0,0.6), -12px -12px 24px rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.02); }
+.neumorphic-ring-inner { background: var(--theme-base); box-shadow: inset 10px 10px 20px rgba(0,0,0,0.8), inset -10px -10px 20px rgba(255,255,255,0.03); }
+.neumorphic-center { background: var(--theme-base); box-shadow: 6px 6px 15px rgba(0,0,0,0.6), -6px -6px 15px rgba(255,255,255,0.03); color: var(--theme-gold); }
+.luxury-sweep { background: conic-gradient(from 0deg, transparent 0%, rgba(197, 168, 128, 0.1) 40%, rgba(197, 168, 128, 0.85) 80%, rgba(10, 17, 40, 1) 100%); animation: spinSlow 2.5s linear infinite; mask-image: radial-gradient(transparent 53%, black 54%); -webkit-mask-image: radial-gradient(transparent 53%, black 54%); }
+
+body.theme-light .neumorphic-ring-outer { box-shadow: 12px 12px 24px rgba(0,0,0,0.06), -12px -12px 24px #ffffff; border: 1px solid rgba(255,255,255,0.5); }
+body.theme-light .neumorphic-ring-inner { box-shadow: inset 10px 10px 20px rgba(0,0,0,0.05), inset -10px -10px 20px #ffffff; }
+body.theme-light .neumorphic-center { box-shadow: 6px 6px 15px rgba(0,0,0,0.06), -6px -6px 15px #ffffff; }
+body.theme-light .luxury-sweep { background: conic-gradient(from 0deg, transparent 0%, rgba(180, 133, 69, 0.15) 40%, rgba(180, 133, 69, 0.85) 80%, rgba(248, 250, 252, 1) 100%); }
+
+/* GOOGLE MATERIAL DESIGN BUTTON */
+.btn-google-material { background-color: #1a2238; color: #e8eaed; border: 1px solid rgba(255,255,255,0.1); border-radius: 24px; padding: 10px 20px; font-weight: 500; box-shadow: 0 2px 6px rgba(0,0,0,0.4); transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; }
+.btn-google-material:active { background-color: #111827; transform: scale(0.97); }
+body.theme-light .btn-google-material { background-color: #ffffff; color: #3c4043; border: 1px solid #dadce0; box-shadow: 0 1px 3px rgba(60,64,67,0.3), 0 1px 2px rgba(60,64,67,0.15); }
+body.theme-light .btn-google-material:active { background-color: #f8f9fa; box-shadow: 0 1px 2px rgba(60,64,67,0.3), 0 1px 1px rgba(60,64,67,0.15); }
+
+/* BGT CUSTOM TOGGLE */
+.bgt-toggle-label { position: relative; display: inline-flex; align-items: center; cursor: pointer; }
+.bgt-toggle-input { display: none; }
+.bgt-toggle-track { width: 44px; height: 24px; background-color: #4b5563; border-radius: 9999px; position: relative; transition: background-color 0.3s ease; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); }
+.bgt-toggle-track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; background-color: #ffffff; border-radius: 50%; transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1); box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+.bgt-toggle-input:checked + .bgt-toggle-track { background-color: #10b981 !important; border-color: #059669 !important; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2), 0 0 10px rgba(16, 185, 129, 0.4) !important; }
+.bgt-toggle-input:checked + .bgt-toggle-track::after { transform: translateX(20px); }
+body.theme-light .bgt-toggle-track { background-color: #cbd5e1; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1); border: 1px solid rgba(0,0,0,0.1); }
+
+/* KOMPONEN UMUM */
+.panel-card { background: var(--theme-panel); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid var(--border-color); box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6); border-radius: 20px; padding: 24px; }
+.input-wrapper { position: relative; width: 100%; margin-bottom: 12px; }
+.input-icon { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--theme-gold); font-size: 1rem; z-index: 2; pointer-events: none; }
+.input-field { width: 100%; padding: 14px 16px 14px 44px; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-color); border-radius: 12px; color: #fff; font-size: 0.9rem; transition: all 0.3s ease; outline: none; appearance: none; }
+.input-field:focus { border-color: var(--theme-gold); background: rgba(0, 0, 0, 0.5); box-shadow: 0 0 0 3px var(--theme-gold-dim); }
+.input-field:disabled { opacity: 0.6; background: rgba(0,0,0,0.5); color: #9ca3af; }
+
+.btn-primary { background: var(--theme-gold-dim); border: 1px solid var(--theme-gold); color: var(--theme-gold); border-radius: 12px; font-weight: 600; padding: 14px 20px; transition: all 0.2s ease; cursor: pointer; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.85rem; }
+.btn-primary:active { transform: scale(0.96); }
+
+.custom-checkbox { appearance: none; width: 20px; height: 20px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(0,0,0,0.3); cursor: pointer; position: relative; }
+.custom-checkbox:checked { background: var(--theme-gold-dim); border-color: var(--theme-gold); }
+.custom-checkbox:checked::after { content: '\f00c'; font-family: "Font Awesome 6 Free"; font-weight: 900; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--theme-gold); font-size: 10px; }
+
+/* TEMA PETA OSM */
+.leaflet-container { background: #0a1128 !important; font-family: 'Plus Jakarta Sans', sans-serif !important; }
+.leaflet-layer { filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(110%) saturate(80%); transition: filter 0.5s ease; }
+.leaflet-control-attribution, .leaflet-control-zoom { display: none !important; }
+
+@keyframes spinSlow { 100% { transform: rotate(360deg); } }
+.pb-safe { padding-bottom: env(safe-area-inset-bottom, 16px); }
+
+/* TEMA TERANG OTOMATIS & SMART FIELDS */
+body.theme-light { --theme-base: #f8fafc; --theme-panel: rgba(255, 255, 255, 0.95); --theme-gold: #b48545; --border-color: rgba(0, 0, 0, 0.08); color: #1e293b; }
+body.theme-light .leaflet-layer { filter: grayscale(10%) contrast(105%) brightness(98%) !important; }
+body.theme-light .input-field { background: rgba(0,0,0,0.03); color: #0f172a; }
+body.theme-light .panel-card { box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08); border-color: rgba(0,0,0,0.05); }
+body.theme-light .bg-theme-base\/95 { background-color: rgba(255, 255, 255, 0.95) !important; border-top-color: rgba(0, 0, 0, 0.08) !important; box-shadow: 0 -5px 20px rgba(0,0,0,0.03); }
+body.theme-light .text-white, body.theme-light .text-gray-400, body.theme-light .text-gray-300 { color: #1e293b !important; }
+body.theme-light .text-gray-500 { color: #64748b !important; }
+
+.smart-field-container { position: relative; }
+.smart-btn-toggle { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--theme-gold); background: transparent; border: none; padding: 5px; cursor: pointer; z-index: 10; font-size: 0.85rem; transition: all 0.2s ease; }
+.smart-btn-toggle:active { transform: translateY(-50%) scale(0.9); }
+.smart-locked { background: transparent !important; border-color: transparent !important; box-shadow: none !important; color: #ffffff !important; font-weight: 600 !important; }
+body.theme-light .smart-locked { color: #0f172a !important; }
+.smart-edit { background: rgba(0, 0, 0, 0.6) !important; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5), 0 0 0 1px var(--theme-gold) !important; color: #ffffff !important; }
+body.theme-light .smart-edit { background: #ffffff !important; box-shadow: inset 0 2px 5px rgba(0,0,0,0.05), 0 0 0 1px var(--theme-gold) !important; color: #0f172a !important; }
+.btn-state-success { background: rgba(16, 185, 129, 0.15) !important; border-color: #10b981 !important; color: #10b981 !important; box-shadow: 0 0 15px rgba(16, 185, 129, 0.4); }
+
+/* ==========================================================================
+   TACTICAL SLIDER (Instrumen Penggeser Jarak Mangkal)
+   ========================================================================== */
+.slider-tactical {
+    -webkit-appearance: none;
+    width: 100%; height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 8px; outline: none;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+    transition: background 0.3s ease;
+}
+
+/* Kursor Jepitan (Thumb) - Gold Metallic */
+.slider-tactical::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: linear-gradient(135deg, #ceab6b, #937135);
+    border: 2px solid #030712;
+    box-shadow: 0 0 10px rgba(206, 171, 107, 0.6), inset 0 2px 4px rgba(255,255,255,0.3);
+    cursor: pointer;
+    transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.slider-tactical::-webkit-slider-thumb:active {
+    transform: scale(1.15);
+    box-shadow: 0 0 15px rgba(206, 171, 107, 0.9), inset 0 2px 4px rgba(255,255,255,0.4);
+}
+
+/* Slider Tactical: Tema Siang */
+body.theme-light .slider-tactical {
+    background: rgba(0, 0, 0, 0.1);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+body.theme-light .slider-tactical::-webkit-slider-thumb {
+    background: linear-gradient(135deg, #b48545, #8a6327);
+    border: 2px solid #f8fafc;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), inset 0 2px 4px rgba(255,255,255,0.4);
+}
