@@ -156,20 +156,36 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // SPESIFIKASI 1.2: PURE CACHE-FIRST untuk Multi-CDN Tile Peta (Menghentikan 95% request berulang)
-    if (reqUrl.includes('basemaps.cartocdn.com') ||
+    // SPESIFIKASI 1.2 & 4: KEY-AGNOSTIC PURE CACHE-FIRST untuk Multi-CDN Tile Peta & MapTiler BYOK
+    if (reqUrl.includes('api.maptiler.com') ||
         reqUrl.includes('arcgisonline.com') ||
         reqUrl.includes('tile.openstreetmap')) {
+        // Lewati cache untuk pre-flight validator token (cache: 'no-store' atau tile uji /256/0/0/0.png)
+        if (event.request.cache === 'no-store' || reqUrl.includes('/256/0/0/0.png')) {
+            return;
+        }
+
+        let cacheKey = event.request;
+        if (reqUrl.includes('api.maptiler.com')) {
+            const urlObj = new URL(event.request.url);
+            urlObj.searchParams.delete('key');
+            cacheKey = urlObj.toString();
+        }
+
         event.respondWith(
-            caches.match(event.request).then((cachedTile) => {
+            caches.match(cacheKey).then((cachedTile) => {
                 if (cachedTile) {
                     return cachedTile;
                 }
                 return fetch(event.request).then((networkResponse) => {
-                    if (networkResponse && (networkResponse.status === 200 || networkResponse.type === 'opaque')) {
+                    const isValidTile = reqUrl.includes('api.maptiler.com')
+                        ? (networkResponse && networkResponse.status === 200)
+                        : (networkResponse && (networkResponse.status === 200 || networkResponse.type === 'opaque'));
+
+                    if (isValidTile) {
                         const responseClone = networkResponse.clone();
                         caches.open(CACHE_TILES).then((cache) => {
-                            cache.put(event.request, responseClone);
+                            cache.put(cacheKey, responseClone);
                         });
                     }
                     return networkResponse;
