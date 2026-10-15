@@ -1,6 +1,6 @@
 // ==========================================================================
 // FILE: js/core/auth.js
-// FUNGSI: Otorisasi Google Hibrida, Biometrik, & Isolasi/Deduplikasi Token FCM
+// FUNGSI: Otorisasi Google Hibrida, Biometrik, Cache Profil 7 Hari (0 Read Harian), & Isolasi FCM
 // ==========================================================================
 
 import { auth, dbFirestore, provider, messaging, getToken, VAPID_KEY } from './firebase-config.js';
@@ -9,6 +9,59 @@ import { doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.1/f
 import { onMessage } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-messaging.js";
 
 import { mainkanNotifikasiPesanMasuk } from '../../chat/app-chat.js';
+import { matikanRadar } from '../../chat/radar-tiket.js';
+
+export const VERIFIED_CACHE_KEY = 'bgt_verified_driver_cache';
+export const VERIFIED_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 Hari (0 Firestore Read Harian)
+
+export function bacaCacheProfilTerverifikasi(uid, emailKey) {
+    try {
+        const raw = localStorage.getItem(VERIFIED_CACHE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || parsed.uid !== uid || parsed.email !== emailKey) return null;
+        if (!parsed.timestamp || (Date.now() - parsed.timestamp) >= VERIFIED_CACHE_TTL_MS) {
+            localStorage.removeItem(VERIFIED_CACHE_KEY);
+            return null;
+        }
+        const data = parsed.profileData;
+        if (!data || !data.admin_status || data.admin_status.isApproved !== true || data.admin_status.isBanned === true) {
+            localStorage.removeItem(VERIFIED_CACHE_KEY);
+            return null;
+        }
+        return data;
+    } catch (e) {
+        return null;
+    }
+}
+
+export function simpanCacheProfilTerverifikasi(uid, emailKey, profileData) {
+    try {
+        if (!uid || !emailKey || !profileData) return;
+        const payload = {
+            uid: uid,
+            email: emailKey,
+            profileData: profileData,
+            timestamp: Date.now()
+        };
+        localStorage.setItem(VERIFIED_CACHE_KEY, JSON.stringify(payload));
+    } catch (e) {}
+}
+
+export function perbaruiCacheProfilTerverifikasi(partialProfile) {
+    try {
+        const raw = localStorage.getItem(VERIFIED_CACHE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !parsed.profileData) return;
+        parsed.profileData.profile = {
+            ...(parsed.profileData.profile || {}),
+            ...partialProfile
+        };
+        parsed.timestamp = Date.now();
+        localStorage.setItem(VERIFIED_CACHE_KEY, JSON.stringify(parsed));
+    } catch (e) {}
+}
 
 if (localStorage.getItem('bgt_session')) {
     const portalLogin = document.getElementById('state-login');
@@ -100,10 +153,13 @@ document.getElementById('btnBioLogin').addEventListener('click', async () => {
 document.getElementById('btn-force-logout').addEventListener('click', () => {
     localStorage.removeItem('bgt_bio_id');
     localStorage.removeItem('bgt_session');
+    localStorage.removeItem(VERIFIED_CACHE_KEY);
+    try { matikanRadar(); } catch (e) {}
     signOut(auth);
 });
 
 document.getElementById('btn-back-login').addEventListener('click', () => {
+    localStorage.removeItem(VERIFIED_CACHE_KEY);
     signOut(auth).then(() => switchState('login'));
 });
 
@@ -111,6 +167,8 @@ document.querySelectorAll('.btn-logout').forEach(btn => {
     btn.addEventListener('click', async () => {
         localStorage.removeItem('bgt_bio_id');
         localStorage.removeItem('bgt_session');
+        localStorage.removeItem(VERIFIED_CACHE_KEY);
+        try { matikanRadar(); } catch (e) {}
         if (currentUser) {
             try {
                 const token = await currentUser.getIdToken();
@@ -122,28 +180,42 @@ document.querySelectorAll('.btn-logout').forEach(btn => {
     });
 });
 
-async function jalankanPipelineValidasi(user) {
+async function jalankanPipelineValidasi(user, forceNetwork = false) {
     currentUser = user;
     const emailKey = user.email.toLowerCase().trim();
+
+    // MITIGASI KUOTA FIRESTORE (0 READ HARIAN): Gunakan cache lokal jika masih berlaku (< 7 Hari)
+    if (!forceNetwork) {
+        const cachedData = bacaCacheProfilTerverifikasi(user.uid, emailKey);
+        if (cachedData) {
+            console.log("[AUTH CACHE] Menggunakan profil terverifikasi dari localStorage (0 Firestore Read).");
+            inisialisasiSesiDriver(user.uid, cachedData);
+            return;
+        }
+    }
 
     try {
         const whitelistSnap = await getDoc(doc(dbFirestore, "whitelist_emails", emailKey));
         if (!whitelistSnap.exists() || whitelistSnap.data().allowed !== true) {
+            localStorage.removeItem(VERIFIED_CACHE_KEY);
             switchState('rejected');
             return;
         }
 
         const profileSnap = await getDoc(doc(dbFirestore, "drivers", user.uid));
         if (!profileSnap.exists()) {
+            localStorage.removeItem(VERIFIED_CACHE_KEY);
             document.getElementById('reg-email').value = user.email;
             bukaFormRegistrasi();
             return;
         }
 
         const data = profileSnap.data();
-        if (data.admin_status && data.admin_status.isApproved === true) {
+        if (data.admin_status && data.admin_status.isApproved === true && data.admin_status.isBanned !== true) {
+            simpanCacheProfilTerverifikasi(user.uid, emailKey, data);
             inisialisasiSesiDriver(user.uid, data);
         } else {
+            localStorage.removeItem(VERIFIED_CACHE_KEY);
             kunciFormRegistrasi(data);
         }
     } catch (err) {
@@ -225,7 +297,7 @@ async function prosesEksekusiFCM(uid) {
     };
 
     try {
-        lacak(1); // Mulai mendaftarkan SW
+        lacak(1);
 
         const lokasiSaatIni = window.location.pathname;
         const pathFolder = lokasiSaatIni.substring(0, lokasiSaatIni.lastIndexOf('/'));
@@ -237,7 +309,7 @@ async function prosesEksekusiFCM(uid) {
         );
         const registration = await Promise.race([registerPromise, registerTimeout]);
 
-        lacak(2); // Menunggu SW Aktif
+        lacak(2);
 
         const pastikanSwAktif = (reg) => new Promise((resolve, reject) => {
             if (reg.active) return resolve(reg);
@@ -254,7 +326,7 @@ async function prosesEksekusiFCM(uid) {
 
         const activeRegistration = await pastikanSwAktif(registration);
 
-        lacak(3); // Meminta Token FCM
+        lacak(3);
 
         const tokenPromise = getToken(messaging, {
             vapidKey: VAPID_KEY,
@@ -267,14 +339,13 @@ async function prosesEksekusiFCM(uid) {
 
         if (!fcmToken) throw new Error("Token Kosong.");
 
-        // DEDUPLIKASI MUTLAK: Cek bgt_fcm_token di localStorage terlebih dahulu (0 Firestore Write jika identik)
         const cachedFcmToken = localStorage.getItem('bgt_fcm_token');
         if (cachedFcmToken && cachedFcmToken === fcmToken) {
             lacak(5);
             return;
         }
 
-        lacak(4); // Menulis Token Baru ke Koleksi Terisolasi /fcm_tokens/{uid}
+        lacak(4);
 
         const authToken = await auth.currentUser.getIdToken();
         const projectId = "bagantara-core";
@@ -300,7 +371,7 @@ async function prosesEksekusiFCM(uid) {
         if (!response.ok) throw new Error(`API Error: ${response.status}`);
 
         localStorage.setItem('bgt_fcm_token', fcmToken);
-        lacak(5); // Selesai Mutlak
+        lacak(5);
 
     } catch (err) {
         console.warn("[FCM BYPASSED] Mengalihkan ke Radar Lokal:", err.message);
@@ -444,19 +515,30 @@ export async function toggleBiometrikManual(aktifkan) {
     }
 }
 
+// SINKRONISASI FCM FOREGROUND TANPA BENTROKAN DENGAN LAYAR SERGAP RADAR
 if (messaging) {
     onMessage(messaging, (payload) => {
-        if (typeof mainkanNotifikasiPesanMasuk === 'function') {
+        if (typeof window.bangunkanLayarOLED === 'function') {
+            window.bangunkanLayarOLED();
+        }
+        if (navigator.vibrate) {
+            navigator.vibrate([600, 200, 600, 200, 800, 200, 600]);
+        }
+
+        const isOrderAlert = payload.data && (payload.data.type === 'NEW_ORDER' || payload.data.idTiket);
+        const modalSergap = document.getElementById('bgt-order-intercept-modal');
+        const isModalSergapOpen = modalSergap && !modalSergap.classList.contains('hidden-state');
+
+        // Jika bukan order baru (mis. pesan chat biasa) dan modal sergap tidak sedang berbunyi, bunyikan ping chat
+        if (!isOrderAlert && !isModalSergapOpen && typeof mainkanNotifikasiPesanMasuk === 'function') {
             mainkanNotifikasiPesanMasuk();
         }
 
-        const judul = payload.notification?.title || "🚨 PESANAN BARU!";
-        const isi = payload.notification?.body || "Silakan cek kotak masuk Anda.";
+        const judul = payload.notification?.title || payload.data?.title || "🚨 PESANAN BARU!";
+        const isi = payload.notification?.body || payload.data?.body || "Silakan cek layar sergap pesanan Anda.";
 
-        if (typeof window.showToast === 'function') {
+        if (!isModalSergapOpen && typeof window.showToast === 'function') {
             window.showToast(`${judul} - ${isi}`, "success");
-        } else if (window.alert) {
-            window.alert(`${judul}\n${isi}`, "success");
         }
     });
 }
