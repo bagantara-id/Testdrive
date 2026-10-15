@@ -282,3 +282,16 @@
 @keyframes pulseRed { 0% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.8); } 100% { opacity: 1; transform: scale(1); } }
 .icon-up-animate { animation: slideUpArrow 1s infinite; font-size: 0.7rem; margin-top: 4px; }
 .animate-pulse-red { animation: pulseRed 1.5s infinite; }
+
+/* SINKRONISASI V7: Kartu Katalog Order & Media Tidak Terjepit Jam + Input Chat Anti-Hitam */
+.msg-bubble.msg-katalog-card {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    max-width: 90% !important;
+}
+#panel-komunikasi-utama input.chat-input {
+    background-color: #162235 !important;
+    color: #f8fafc !important;
+    -webkit-text-fill-color: #f8fafc !important;
+    caret-color: #ceab6b !important;
+}
