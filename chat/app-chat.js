@@ -1,17 +1,18 @@
 // ==========================================================================
 // FILE: chat/app-chat.js
-// FUNGSI: Mesin Obrolan Real-Time, Granular Inbox, WebP Edge Compressor, & Anti-XSS
-// ARSITEKTUR: Enterprise Grade - Zero Auto-Delete & Zero Native Dialogs
+// FUNGSI: Mesin Obrolan Real-Time, REST Inbox (0 Koneksi Idle), WebP Edge Compressor, & Anti-XSS
+// ARSITEKTUR: Enterprise Grade - On-Demand Socket (goOnline hanya di Ruang Chat)
 // ==========================================================================
 
-import { dbChat } from './config-chat.js';
+import { dbChat, dbRadar } from './config-chat.js';
+import { configChat } from '../js/config/credentials.js';
 import { auth } from '../js/core/firebase-config.js';
 import { uploadMediaKeCloudinary, kompresGambarKeWebP, DEFAULT_UPLOAD_PRESET } from './cloud-media.js';
-import { ref, push, onChildAdded, onChildChanged, onChildRemoved, remove, update, query, limitToLast, get, goOnline as rtdbGoOnline, goOffline as rtdbGoOffline } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
+import { ref, push, onChildAdded, onChildChanged, remove, update, query, limitToLast, get, goOnline as rtdbGoOnline, goOffline as rtdbGoOffline } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
 
 // Definisi fungsi jaringan secara eksplisit
-function goOnline(dbInstance) { try { rtdbGoOnline(dbInstance); } catch (e) {} }
-function goOffline(dbInstance) { try { rtdbGoOffline(dbInstance); } catch (e) {} }
+export function goOnline(dbInstance) { try { rtdbGoOnline(dbInstance); } catch (e) {} }
+export function goOffline(dbInstance) { try { rtdbGoOffline(dbInstance); } catch (e) {} }
 
 const IZINKAN_MEDIA = true;
 const CLOUDINARY_PRESET = DEFAULT_UPLOAD_PRESET;
@@ -23,10 +24,11 @@ let pemantauPesan = null;
 let perakamAudio = null;
 let potonganAudio = [];
 let isDOMEventBound = false;
-let isInboxListening = false;
 let pemantauPesanUbah = null;
-let pemantauInbox = null;
 let intervalRekamanGlobal = null;
+
+// Memori lokal daftar inbox (0 Koneksi WebSocket Permanen)
+let memoriInboxLokal = {};
 
 // ==========================================================================
 // 0. SANITASI ANTI-XSS (SPESIFIKASI 3.4)
@@ -42,10 +44,52 @@ export function escapeHTML(str) {
 }
 
 // ==========================================================================
-// 1. MESIN INBOX GRANULAR (SPESIFIKASI 3.1: ELIMINASI FULL-TREE DOWNLOAD)
+// 1. MESIN INBOX REST RINGAN (0 KONEKSI WEBSOCKET PERMANEN)
 // ==========================================================================
+function dapatkanKunciStorageInbox(uid) {
+    return `bgt_inbox_local_${uid}`;
+}
+
+function bacaCacheInboxLokal(uid) {
+    if (!uid) return {};
+    try {
+        const raw = localStorage.getItem(dapatkanKunciStorageInbox(uid));
+        return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function tulisCacheInboxLokal(uid, dataObj) {
+    if (!uid) return;
+    try {
+        localStorage.setItem(dapatkanKunciStorageInbox(uid), JSON.stringify(dataObj || {}));
+    } catch (e) {}
+}
+
+export function simpanItemInboxLokal(uid, idTiket, itemData) {
+    if (!uid || !idTiket || !itemData) return;
+    const cache = bacaCacheInboxLokal(uid);
+    cache[idTiket] = {
+        ...(cache[idTiket] || {}),
+        ...itemData
+    };
+    memoriInboxLokal = cache;
+    tulisCacheInboxLokal(uid, cache);
+    renderDaftarInboxDariMemori();
+}
+
+export function hapusItemInboxLokal(uid, idTiket) {
+    if (!uid || !idTiket) return;
+    const cache = bacaCacheInboxLokal(uid);
+    delete cache[idTiket];
+    memoriInboxLokal = cache;
+    tulisCacheInboxLokal(uid, cache);
+    renderDaftarInboxDariMemori();
+}
+
 function buatHTMLKartuInbox(idTiket, tiket) {
-    const waktuFormat = new Date(tiket.waktu_update || tiket.waktu_dibuat).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    const waktuFormat = new Date(tiket.waktu_update || tiket.waktu_dibuat || Date.now()).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
     const rawNama = tiket.nama_klien || "Klien";
     const namaAman = escapeHTML(rawNama);
     const inisialAman = escapeHTML(rawNama.substring(0, 1).toUpperCase());
@@ -92,103 +136,66 @@ function sinkronisasiCounterInbox() {
     countEl.innerText = `${totalSesi} Sesi`;
 }
 
-export function inisialisasiInboxChat() {
-    if (!auth.currentUser) return;
+function renderDaftarInboxDariMemori() {
+    const container = document.getElementById('inbox-list-container');
+    if (!container) return;
 
-    if (typeof pemantauInbox === 'function') {
-        pemantauInbox();
-        pemantauInbox = null;
-    }
-    isInboxListening = true;
+    container.querySelectorAll('.inbox-card').forEach(el => el.remove());
 
-    const referensiInbox = query(ref(dbChat, `inbox_mitra/${auth.currentUser.uid}`), limitToLast(20));
+    const entries = Object.entries(memoriInboxLokal || {})
+        .filter(([, val]) => val && (val.waktu_dibuat || val.waktu_update))
+        .sort((a, b) => (Number(b[1].waktu_update || b[1].waktu_dibuat || 0) - Number(a[1].waktu_update || a[1].waktu_dibuat || 0)))
+        .slice(0, 20);
 
-    setTimeout(() => {
-        const container = document.getElementById('inbox-list-container');
-        if (container) {
-            container.querySelectorAll('.inbox-card').forEach(el => el.remove());
-            sinkronisasiCounterInbox();
-        }
+    entries.forEach(([idTiket, tiket]) => {
+        const cardHTML = buatHTMLKartuInbox(idTiket, tiket);
+        container.insertAdjacentHTML('beforeend', cardHTML);
+        const newCard = container.querySelector(`.inbox-card[data-id="${CSS.escape(idTiket)}"]`);
+        ikatKlikKartuInbox(newCard);
+    });
 
-        const unsubAdd = onChildAdded(referensiInbox, (snapshot) => {
-            const containerEl = document.getElementById('inbox-list-container');
-            if (!containerEl) return;
-
-            const tiket = snapshot.val();
-            const idTiket = snapshot.key;
-            if (!tiket || !tiket.waktu_dibuat) return;
-
-            const existingCard = containerEl.querySelector(`.inbox-card[data-id="${CSS.escape(idTiket)}"]`);
-            const cardHTML = buatHTMLKartuInbox(idTiket, tiket);
-
-            if (existingCard) {
-                existingCard.outerHTML = cardHTML;
-                const updatedCard = containerEl.querySelector(`.inbox-card[data-id="${CSS.escape(idTiket)}"]`);
-                ikatKlikKartuInbox(updatedCard);
-            } else {
-                containerEl.insertAdjacentHTML('beforeend', cardHTML);
-                const newCard = containerEl.querySelector(`.inbox-card[data-id="${CSS.escape(idTiket)}"]`);
-                ikatKlikKartuInbox(newCard);
-            }
-
-            sinkronisasiCounterInbox();
-        });
-
-        const unsubChange = onChildChanged(referensiInbox, (snapshot) => {
-            const containerEl = document.getElementById('inbox-list-container');
-            if (!containerEl) return;
-
-            const tiket = snapshot.val();
-            const idTiket = snapshot.key;
-            if (!tiket || !tiket.waktu_dibuat) return;
-
-            const existingCard = containerEl.querySelector(`.inbox-card[data-id="${CSS.escape(idTiket)}"]`);
-            const cardHTML = buatHTMLKartuInbox(idTiket, tiket);
-
-            if (existingCard) {
-                existingCard.outerHTML = cardHTML;
-                const updatedCard = containerEl.querySelector(`.inbox-card[data-id="${CSS.escape(idTiket)}"]`);
-                ikatKlikKartuInbox(updatedCard);
-            } else {
-                containerEl.insertAdjacentHTML('beforeend', cardHTML);
-                const newCard = containerEl.querySelector(`.inbox-card[data-id="${CSS.escape(idTiket)}"]`);
-                ikatKlikKartuInbox(newCard);
-            }
-
-            sinkronisasiCounterInbox();
-        });
-
-        const unsubRemove = onChildRemoved(referensiInbox, (snapshot) => {
-            const containerEl = document.getElementById('inbox-list-container');
-            if (!containerEl) return;
-
-            const idTiket = snapshot.key;
-            const existingCard = containerEl.querySelector(`.inbox-card[data-id="${CSS.escape(idTiket)}"]`);
-            if (existingCard) {
-                existingCard.remove();
-            }
-
-            sinkronisasiCounterInbox();
-        });
-
-        pemantauInbox = () => {
-            unsubAdd();
-            unsubChange();
-            unsubRemove();
-        };
-    }, 500);
+    sinkronisasiCounterInbox();
 }
 
-auth.onAuthStateChanged(user => { if (user) inisialisasiInboxChat(); });
+export async function inisialisasiInboxChat() {
+    if (!auth.currentUser) return;
+    const uid = auth.currentUser.uid;
+
+    // 1. Tampilkan segera dari memori lokal / localStorage
+    memoriInboxLokal = bacaCacheInboxLokal(uid);
+    renderDaftarInboxDariMemori();
+
+    // 2. Muat daftar inbox_mitra terbaru via REST fetch ringan (0 Koneksi WebSocket)
+    try {
+        const ctrl = new AbortController();
+        const tId = setTimeout(() => ctrl.abort(), 4000);
+        const url = `${configChat.databaseURL}/inbox_mitra/${encodeURIComponent(uid)}.json?orderBy=%22$key%22&limitToLast=20`;
+        const res = await fetch(url, { signal: ctrl.signal });
+        clearTimeout(tId);
+
+        if (res.ok) {
+            const data = await res.json();
+            memoriInboxLokal = data && typeof data === 'object' ? data : {};
+            tulisCacheInboxLokal(uid, memoriInboxLokal);
+            renderDaftarInboxDariMemori();
+        }
+    } catch (err) {
+        // Gunakan memori lokal jika jaringan sedang lambat
+        renderDaftarInboxDariMemori();
+    }
+}
 
 // ==========================================================================
-// 2. CONTROLLER RUANG OBROLAN
+// 2. CONTROLLER RUANG OBROLAN (ON-DEMAND WEBSOCKET)
 // ==========================================================================
-export function bukaRuangKomunikasi(idTiketMasuk, namaKlien = "Klien") {
+export function bukaRuangKomunikasi(idTiketMasuk, namaKlien = "Klien", tiketAwal = null) {
     if (!idTiketMasuk) return;
 
     // KILL SWITCH: Matikan notifikasi berdering seketika saat chat dibuka
     hentikanNotifChat();
+
+    // MITIGASI LIMIT 100 KONEKSI: Nyalakan soket dbChat HANYA saat ruang komunikasi dibuka
+    goOnline(dbChat);
 
     idRuangObrolanAktif = idTiketMasuk;
     waktuBukaRuang = Date.now();
@@ -198,9 +205,13 @@ export function bukaRuangKomunikasi(idTiketMasuk, namaKlien = "Klien") {
     const bodyChat = document.getElementById('chat-body');
 
     if (panelChat && titleChat && bodyChat) {
-        titleChat.innerText = namaKlien.split(' ')[0];
+        titleChat.innerText = String(namaKlien || "Klien").split(' ')[0];
         bodyChat.innerHTML = '<div style="text-align:center; font-size:0.65rem; color:#64748b; margin:10px 0;">Sesi Privat. Hapus pesan melalui tombol tong sampah.</div>';
         panelChat.classList.remove('hidden-state');
+    }
+
+    if (tiketAwal && typeof window.gambarRutePesananOSRM === 'function') {
+        window.gambarRutePesananOSRM(tiketAwal);
     }
 
     pasangSarafInteraksi();
@@ -272,12 +283,16 @@ function pasangSarafInteraksi() {
                     const uid = auth.currentUser.uid;
                     const idSesi = idRuangObrolanAktif;
 
-                    push(ref(dbChat, `sesi_komunikasi/${idSesi}/pesan`), {
+                    goOnline(dbChat);
+                    await push(ref(dbChat, `sesi_komunikasi/${idSesi}/pesan`), {
                         pengirim: "mitra", tipe: "sistem_tolak", konten: "Driver menolak pesanan", waktu: Date.now(), status: "sent"
-                    });
+                    }).catch(() => {});
+
+                    hapusItemInboxLokal(uid, idSesi);
+                    if (typeof window.bersihkanRutePesanan === 'function') window.bersihkanRutePesanan();
 
                     setTimeout(() => {
-                        remove(ref(dbChat, `radar_tiket/${uid}/${idSesi}`)).catch(() => {});
+                        remove(ref(dbRadar, `radar_tiket/${uid}/${idSesi}`)).catch(() => {});
                         remove(ref(dbChat, `inbox_mitra/${uid}/${idSesi}`)).catch(() => {});
                         remove(ref(dbChat, `sesi_komunikasi/${idSesi}`)).catch(() => {});
                     }, 1500);
@@ -292,15 +307,33 @@ function pasangSarafInteraksi() {
 
             try {
                 let noWaKlien = '';
+                let dataTiketRadar = null;
                 if (auth.currentUser && idRuangObrolanAktif) {
-                    const snapTiket = await get(ref(dbChat, `radar_tiket/${auth.currentUser.uid}/${idRuangObrolanAktif}`));
-                    if (snapTiket.exists()) noWaKlien = snapTiket.val().wa_klien || '';
-                }
+                    const uid = auth.currentUser.uid;
+                    const snapTiket = await get(ref(dbRadar, `radar_tiket/${uid}/${idRuangObrolanAktif}`)).catch(() => null);
+                    if (snapTiket && snapTiket.exists()) {
+                        dataTiketRadar = snapTiket.val();
+                        noWaKlien = dataTiketRadar.wa_klien || '';
+                    }
+                    if (!noWaKlien) {
+                        const snapMeta = await get(ref(dbChat, `sesi_komunikasi/${idRuangObrolanAktif}/metadata_order`)).catch(() => null);
+                        if (snapMeta && snapMeta.exists()) {
+                            noWaKlien = snapMeta.val().wa_klien || '';
+                        }
+                    }
 
-                if (auth.currentUser && idRuangObrolanAktif) {
-                    const refRadar = ref(dbChat, `radar_tiket/${auth.currentUser.uid}/${idRuangObrolanAktif}`);
-                    await update(refRadar, { status: 'ACCEPTED' });
-                    setTimeout(() => { remove(refRadar).catch(() => {}); }, 5000);
+                    const refRadar = ref(dbRadar, `radar_tiket/${uid}/${idRuangObrolanAktif}`);
+                    await update(refRadar, { status: 'ACCEPTED', waktu_diterima: Date.now() }).catch(() => {});
+                    setTimeout(() => { remove(refRadar).catch(() => {}); }, 4000);
+
+                    await update(ref(dbChat, `sesi_komunikasi/${idRuangObrolanAktif}/metadata_order`), {
+                        status: 'ACCEPTED',
+                        waktu_diterima: Date.now()
+                    }).catch(() => {});
+
+                    if (dataTiketRadar && typeof window.gambarRutePesananOSRM === 'function') {
+                        window.gambarRutePesananOSRM(dataTiketRadar);
+                    }
                 }
 
                 if (actionArea) {
@@ -688,6 +721,9 @@ export function akhiriSesiKomunikasi() {
     if (typeof pemantauPesan === 'function') { pemantauPesan(); pemantauPesan = null; }
     if (typeof pemantauPesanUbah === 'function') { pemantauPesanUbah(); pemantauPesanUbah = null; }
 
+    // MITIGASI LIMIT 100 KONEKSI: Putus segera koneksi dbChat saat keluar dari ruang obrolan
+    goOffline(dbChat);
+
     if (intervalRekamanGlobal) { clearInterval(intervalRekamanGlobal); intervalRekamanGlobal = null; }
 
     if (perakamAudio && (perakamAudio.state === "recording" || perakamAudio.state === "paused")) {
@@ -710,14 +746,21 @@ export function akhiriSesiKomunikasi() {
     if (indikatorKedip) indikatorKedip.classList.add('hidden-state');
 }
 
-function hapusSesiObrolanMutlak() {
+async function hapusSesiObrolanMutlak() {
     if (!idRuangObrolanAktif || !auth.currentUser) return;
+    const uid = auth.currentUser.uid;
     const idSesi = idRuangObrolanAktif;
 
     try {
-        remove(ref(dbChat, `radar_tiket/${auth.currentUser.uid}/${idSesi}`));
-        remove(ref(dbChat, `inbox_mitra/${auth.currentUser.uid}/${idSesi}`));
-        remove(ref(dbChat, `sesi_komunikasi/${idSesi}`));
+        goOnline(dbChat);
+        hapusItemInboxLokal(uid, idSesi);
+        if (typeof window.bersihkanRutePesanan === 'function') window.bersihkanRutePesanan();
+
+        await Promise.allSettled([
+            remove(ref(dbRadar, `radar_tiket/${uid}/${idSesi}`)),
+            remove(ref(dbChat, `inbox_mitra/${uid}/${idSesi}`)),
+            remove(ref(dbChat, `sesi_komunikasi/${idSesi}`))
+        ]);
         if (window.showToast) window.showToast("Sesi berhasil dihapus.", "success");
     } catch (err) {
         console.error("Gagal menghapus:", err);
@@ -807,11 +850,17 @@ function mulaiDengarPesan() {
                 if (indikatorKedip) indikatorKedip.classList.remove('hidden-state');
 
                 if (auth.currentUser && idRuangObrolanAktif) {
+                    const uid = auth.currentUser.uid;
                     let previewTeks = pesan.tipe === 'teks' ? pesan.konten : (pesan.tipe === 'lokasi' ? '📍 Lokasi Baru' : (pesan.tipe === 'audio' ? '🎤 Suara Baru' : (pesan.tipe === 'katalog_order' ? '📜 Mengirim Katalog Order' : '🖼️ Gambar Baru')));
-                    update(ref(dbChat, `inbox_mitra/${auth.currentUser.uid}/${idRuangObrolanAktif}`), {
+                    const waktuSekarang = Date.now();
+                    update(ref(dbChat, `inbox_mitra/${uid}/${idRuangObrolanAktif}`), {
                         pesan_terakhir: previewTeks,
-                        waktu_update: Date.now()
+                        waktu_update: waktuSekarang
                     }).catch(() => {});
+                    simpanItemInboxLokal(uid, idRuangObrolanAktif, {
+                        pesan_terakhir: previewTeks,
+                        waktu_update: waktuSekarang
+                    });
                 }
             }
         }
@@ -827,6 +876,16 @@ function mulaiDengarPesan() {
                 const k = JSON.parse(pesan.konten);
                 const formatRp = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(k.harga) || 0);
                 const warnaLayanan = k.layanan === 'RIDE' ? '#3b82f6' : (k.layanan === 'EXPRESS' ? '#f59e0b' : '#10b981');
+
+                // Gambar rute jalan raya OSRM pada peta driver jika koordinat tersedia di struk katalog_order
+                if ((k.pickup_coord || k.dropoff_coord) && typeof window.gambarRutePesananOSRM === 'function') {
+                    window.gambarRutePesananOSRM({
+                        pickup_coord: k.pickup_coord,
+                        dropoff_coord: k.dropoff_coord,
+                        pickup_alamat: k.jemput,
+                        dropoff_alamat: k.tujuan
+                    });
+                }
 
                 let mapsUrl = `https://www.google.com/maps/dir/?api=1`;
                 if (k.pickup_coord) mapsUrl += `&origin=${encodeURIComponent(k.pickup_coord)}`;
@@ -864,7 +923,7 @@ function mulaiDengarPesan() {
                 }
 
                 let htmlBadgeTip = '';
-                if (k.tip_nominal && k.tip_nominal > 0) {
+                if (k.tip_nominal && Number(k.tip_nominal) > 0) {
                     const formatTip = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(k.tip_nominal) || 0);
                     htmlBadgeTip = `<div style="margin-top:4px; display:inline-block; background:rgba(212, 175, 55, 0.15); border:1px solid #ceab6b; color:#ceab6b; font-size:0.6rem; font-weight:bold; padding:2px 8px; border-radius:12px;">
                         <i class="fa-solid fa-bolt"></i> Termasuk Tip ${formatTip}
@@ -933,8 +992,18 @@ function mulaiDengarPesan() {
         } else if (pesan.tipe === 'audio') {
             htmlKonten = `<audio controls src="${escapeHTML(pesan.konten)}" style="height:32px; width:180px;"></audio>`;
         } else if (pesan.tipe === 'gambar') {
-            let teksSalin = `SUMBER: ${pesan.forensik?.sumber}\nIP SAAT INI: ${pesan.forensik?.ip}\nNET: ${pesan.forensik?.jaringan}\nRAM/CPU: ${pesan.forensik?.ram_cpu}\nGPS SAAT UPLOAD: ${pesan.forensik?.lokasi}\nOS: ${pesan.forensik?.browser}`;
-            if (pesan.forensik?.exif) teksSalin += `\n\n--- METADATA ASLI (GALERI) ---\nKAMERA: ${pesan.forensik.exif.kamera}\nWAKTU DIAMBIL: ${pesan.forensik.exif.waktu_diambil}\nGPS ASLI: ${pesan.forensik.exif.lokasi_asli}`;
+            let teksSalin = `SUMBER: ${pesan.forensik?.sumber}
+IP SAAT INI: ${pesan.forensik?.ip}
+NET: ${pesan.forensik?.jaringan}
+RAM/CPU: ${pesan.forensik?.ram_cpu}
+GPS SAAT UPLOAD: ${pesan.forensik?.lokasi}
+OS: ${pesan.forensik?.browser}`;
+            if (pesan.forensik?.exif) teksSalin += `
+
+--- METADATA ASLI (GALERI) ---
+KAMERA: ${pesan.forensik.exif.kamera}
+WAKTU DIAMBIL: ${pesan.forensik.exif.waktu_diambil}
+GPS ASLI: ${pesan.forensik.exif.lokasi_asli}`;
 
             const b64Teks = btoa(unescape(encodeURIComponent(teksSalin)));
             const dataForensikStr = btoa(unescape(encodeURIComponent(JSON.stringify(pesan.forensik || {}))));
@@ -955,7 +1024,7 @@ function mulaiDengarPesan() {
         const idUnik = snapshot.key;
 
         if (pesan.pengirim === 'klien' && pesan.status !== 'read') {
-            update(ref(dbChat, `sesi_komunikasi/${idRuangObrolanAktif}/pesan/${idUnik}`), { status: 'read' });
+            update(ref(dbChat, `sesi_komunikasi/${idRuangObrolanAktif}/pesan/${idUnik}`), { status: 'read' }).catch(() => {});
         }
 
         let statusIkon = '';
@@ -994,16 +1063,23 @@ async function kirimPayloadPesan(kontenPesan, tipePesan = "teks", metadataForens
     if (!idRuangObrolanAktif || idRuangObrolanAktif.trim() === "" || !kontenPesan) return;
 
     try {
+        goOnline(dbChat);
         const referensi = ref(dbChat, `sesi_komunikasi/${idRuangObrolanAktif}/pesan`);
         const payload = { pengirim: "mitra", tipe: tipePesan, konten: kontenPesan, waktu: Date.now(), status: "sent" };
         if (metadataForensik) payload.forensik = metadataForensik;
         await push(referensi, payload);
 
         if (auth.currentUser) {
+            const uid = auth.currentUser.uid;
             let previewTeks = tipePesan === 'teks' ? kontenPesan : (tipePesan === 'lokasi' ? '📍 Mengirim Lokasi' : (tipePesan === 'audio' ? '🎤 Pesan Suara' : '🖼️ Mengirim Gambar'));
-            await update(ref(dbChat, `inbox_mitra/${auth.currentUser.uid}/${idRuangObrolanAktif}`), {
+            const waktuSekarang = Date.now();
+            await update(ref(dbChat, `inbox_mitra/${uid}/${idRuangObrolanAktif}`), {
                 pesan_terakhir: "Anda: " + previewTeks,
-                waktu_update: Date.now()
+                waktu_update: waktuSekarang
+            });
+            simpanItemInboxLokal(uid, idRuangObrolanAktif, {
+                pesan_terakhir: "Anda: " + previewTeks,
+                waktu_update: waktuSekarang
             });
         }
     } catch (err) { console.error("Gagal kirim pesan:", err); }
@@ -1068,6 +1144,7 @@ function dapatkanKunciLokasiForensik() {
 }
 
 // SPESIFIKASI 3.3: Ekstraksi EXIF Asli -> On-Device WebP Micro-Compressor (Max 1280px, Quality 0.75) -> Unggah ke Cloudinary
+// Dilengkapi AbortController timeout 1500ms pada ipify agar tidak pernah macet saat sinyal buruk
 async function ekstrakForensikDanKirim(fileGambar, asalTangkapan) {
     if (window.showToast) window.showToast("Mengekstrak Metadata & Mengompresi...", "info");
 
@@ -1082,7 +1159,16 @@ async function ekstrakForensikDanKirim(fileGambar, asalTangkapan) {
     }
 
     let ipPublik = "Gagal memuat";
-    try { const res = await fetch('https://api.ipify.org?format=json'); const d = await res.json(); ipPublik = d.ip; } catch (e) {}
+    try {
+        const abortCtrl = new AbortController();
+        const ipTimeoutId = setTimeout(() => abortCtrl.abort(), 1500);
+        const res = await fetch('https://api.ipify.org?format=json', { signal: abortCtrl.signal });
+        clearTimeout(ipTimeoutId);
+        const d = await res.json();
+        ipPublik = d.ip || "Gagal memuat";
+    } catch (e) {
+        ipPublik = "Timeout/Offline";
+    }
 
     const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
     const infoJaringan = conn ? `${conn.effectiveType || 'N/A'} (${conn.downlink || 0}Mbps)` : "N/A";
@@ -1190,21 +1276,16 @@ function tutupBottomSheetForensik() {
 }
 
 // ==========================================================================
-// 6. MANAJEMEN KONEKSI CERDAS
+// 6. MANAJEMEN KONEKSI CERDAS (MUTLAK 0 KONEKSI SAAT BACKGROUND / LUAR CHAT)
 // ==========================================================================
-let timerPemutusKoneksi = null;
 document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === 'hidden') {
-        timerPemutusKoneksi = setTimeout(() => {
-            const modeDriver = window.__BGT_TELEMETRY_CACHE ? window.__BGT_TELEMETRY_CACHE.mode : 'offline';
-            if (modeDriver === 'offline' || modeDriver === 'persiapan') {
-                goOffline(dbChat);
-            } else {
-                console.log(`[SISTEM] PWA disembunyikan. Koneksi dipertahankan (Mode: ${String(modeDriver).toUpperCase()})`);
-            }
-        }, 10000);
+        // Segera putus koneksi dbChat saat aplikasi di latar belakang
+        goOffline(dbChat);
     } else {
-        clearTimeout(timerPemutusKoneksi);
-        goOnline(dbChat);
+        // Hanya sambungkan kembali dbChat jika ruang komunikasi sedang terbuka
+        if (idRuangObrolanAktif) {
+            goOnline(dbChat);
+        }
     }
 });
