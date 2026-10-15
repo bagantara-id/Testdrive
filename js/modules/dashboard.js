@@ -36,6 +36,37 @@ function inisialisasiTemaOtomatis() {
     setTimeout(() => window.dispatchEvent(new CustomEvent('theme-toggled', { detail: { isLight: !isNight } })), 800);
 }
 
+function sinkronisasiTampilanTokenPeta(statusOverride = null) {
+    const savedMapKey = (localStorage.getItem('bgt_maptiler_key') || '').trim();
+    const elMapKey = document.getElementById('dash-map-key');
+    const elBadge = document.getElementById('map-key-status-badge');
+
+    // Selalu cetak token yang benar-benar tersimpan di memori HP ke dalam kolom input
+    if (elMapKey) {
+        elMapKey.value = savedMapKey;
+    }
+
+    if (!elBadge) return;
+
+    if (statusOverride === 'FALLBACK_LIMIT') {
+        elBadge.className = 'font-mono font-bold text-[0.6rem] bg-amber-500/15 text-amber-400 border border-amber-500/40 px-2 py-0.5 rounded';
+        elBadge.innerText = 'LIMIT -> CADANGAN OSM';
+    } else if (savedMapKey) {
+        const maskPreview = savedMapKey.length > 8
+            ? `${savedMapKey.substring(0, 4)}...${savedMapKey.substring(savedMapKey.length - 3)}`
+            : savedMapKey;
+        elBadge.className = 'font-mono font-bold text-[0.6rem] bg-emerald-500/15 text-emerald-400 border border-emerald-500/40 px-2 py-0.5 rounded';
+        elBadge.innerText = `MAPTILER AKTIF (${maskPreview})`;
+    } else {
+        elBadge.className = 'font-mono font-bold text-[0.6rem] bg-blue-500/15 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded';
+        elBadge.innerText = 'DEFAULT: OSM GRATIS';
+    }
+}
+
+window.addEventListener('map-provider-fallback', () => {
+    sinkronisasiTampilanTokenPeta('FALLBACK_LIMIT');
+});
+
 // FUNGSI HYDRATION (MENYEDOT DATA DARI MEMORI HP SECARA INSTAN)
 export function hydrateUI() {
     const savedKategori = localStorage.getItem('bgt_driver_kategori');
@@ -73,8 +104,7 @@ export function hydrateUI() {
     const elTarif = document.getElementById('dash-tarif');
     if (elTarif) elTarif.value = localSettings.tarif || '';
 
-    const elMapKey = document.getElementById('dash-map-key');
-    if (elMapKey) elMapKey.value = localStorage.getItem('bgt_maptiler_key') || '';
+    sinkronisasiTampilanTokenPeta();
 
     const elOpsRadius = document.getElementById('ops-slider-radius');
     const elOpsRadiusVal = document.getElementById('ops-radius-val');
@@ -127,6 +157,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
         if (target !== 'map-only') {
             const tgtEl = document.getElementById(target);
             if (tgtEl) tgtEl.classList.remove('hidden-state');
+            if (target === 'panel-ops') sinkronisasiTampilanTokenPeta();
             kunciSemuaSmartFields();
             floaters.forEach(id => { const el = document.getElementById(id); if (el) el.classList.add('hidden-state'); });
         } else {
@@ -306,28 +337,42 @@ if (btnSave) {
         kunciSemuaSmartFields();
 
         try {
-            // SPESIFIKASI BYOK MAPTILER: Pre-Flight Token Validator (Murni Lokal, 0 Payload RTDB)
+            // SPESIFIKASI BYOK MAPTILER: Pre-Flight Token Validator (Murni Lokal di Memori HP, 0 Payload RTDB)
             const elMapKey = document.getElementById('dash-map-key');
             const inputKey = elMapKey ? elMapKey.value.trim() : '';
-            const savedMapKey = localStorage.getItem('bgt_maptiler_key') || '';
+            const savedMapKey = (localStorage.getItem('bgt_maptiler_key') || '').trim();
+            let pesanToastPeta = '';
+            let tipeToastPeta = 'success';
 
             if (inputKey === '') {
                 localStorage.removeItem('bgt_maptiler_key');
+                sinkronisasiTampilanTokenPeta();
                 window.dispatchEvent(new CustomEvent('map-key-updated', { detail: { key: '' } }));
+                if (savedMapKey !== '') {
+                    pesanToastPeta = 'Token dihapus. Peta beralih ke OSM Gratis.';
+                }
             } else if (inputKey !== savedMapKey) {
                 try {
-                    const testRes = await fetch(`https://api.maptiler.com/maps/streets-v2/256/0/0/0.png?key=${inputKey}`, { cache: 'no-store' });
+                    const testRes = await fetch(`https://api.maptiler.com/maps/streets-v2/256/0/0/0.png?key=${encodeURIComponent(inputKey)}`, { cache: 'no-store' });
                     if (testRes.ok && testRes.status === 200) {
                         localStorage.setItem('bgt_maptiler_key', inputKey);
+                        sinkronisasiTampilanTokenPeta();
                         window.dispatchEvent(new CustomEvent('map-key-updated', { detail: { key: inputKey } }));
+                        const kodeSingkat = inputKey.length > 6 ? `${inputKey.substring(0, 4)}...${inputKey.substring(inputKey.length - 2)}` : inputKey;
+                        pesanToastPeta = `Token MapTiler (${kodeSingkat}) aktif & tersimpan!`;
                     } else {
-                        if (elMapKey) elMapKey.value = savedMapKey;
-                        if (window.showToast) window.showToast("Token MapTiler tidak valid atau kuota habis.", "warning");
+                        sinkronisasiTampilanTokenPeta();
+                        tipeToastPeta = 'warning';
+                        pesanToastPeta = 'Token MapTiler tidak valid atau kuota habis.';
                     }
                 } catch (mapErr) {
-                    if (elMapKey) elMapKey.value = savedMapKey;
-                    if (window.showToast) window.showToast("Token MapTiler tidak valid atau kuota habis.", "warning");
+                    sinkronisasiTampilanTokenPeta();
+                    tipeToastPeta = 'warning';
+                    pesanToastPeta = 'Token MapTiler tidak valid atau kuota habis.';
                 }
+            } else {
+                // Token tidak berubah, pastikan tetap tercetak di kolom input dan status badge sinkron
+                sinkronisasiTampilanTokenPeta();
             }
 
             const newSettings = {
@@ -348,7 +393,13 @@ if (btnSave) {
             btnSave.classList.remove('opacity-80', 'cursor-not-allowed');
             btnSave.classList.add('btn-state-success');
             btnSave.innerHTML = '<i class="fa-solid fa-check"></i> TERSIMPAN ✓';
-            if (window.showToast) window.showToast("Pengaturan operasional disimpan.", "success");
+            if (window.showToast) {
+                if (pesanToastPeta) {
+                    window.showToast(pesanToastPeta, tipeToastPeta);
+                } else {
+                    window.showToast("Pengaturan operasional disimpan.", "success");
+                }
+            }
         } catch (err) {
             window.alert("Gagal sinkronisasi: " + err.message, "error");
             btnSave.classList.remove('opacity-80', 'cursor-not-allowed');

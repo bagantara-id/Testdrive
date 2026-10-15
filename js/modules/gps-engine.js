@@ -41,18 +41,21 @@ let koordinatLokal = null;
 let isGeofenceValid = true;
 
 // ==========================================================================
-// 0. HYDRA MULTI-CDN TILE ENGINE (BYOK MAPTILER 512PX & EXTREME QUOTA SAVER)
+// 0. HYDRA MULTI-CDN TILE ENGINE (DEFAULT AWAL: OSM GRATIS | OPSIONAL: BYOK MAPTILER PRIBADI)
 // ==========================================================================
 function dapatkanUrlTileProvider(index, isLight) {
     if (index === 0) {
+        // Indeks 0: Murni menggunakan Token MapTiler Pribadi Driver dari localStorage (Bukan Token Aplikasi Publik)
         const key = (localStorage.getItem('bgt_maptiler_key') || '').trim();
         return isLight
             ? `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=${key}`
             : `https://api.maptiler.com/maps/streets-v2-dark/{z}/{x}/{y}.png?key=${key}`;
     } else if (index === 1) {
-        return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+        // Indeks 1 (Default Awal Tanpa Token): OpenStreetMap (OSM) Standar Gratis
+        return 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
     } else {
-        return 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png';
+        // Indeks 2 (Fallback Sekunder Tanpa Token): ArcGIS World Street Map
+        return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
     }
 }
 
@@ -69,7 +72,8 @@ function sinkronisasiFilterFallbackPeta() {
 function pasangTileLayerHydra(providerIdx = 0) {
     if (!mapSystem) return;
 
-    // Smart Circuit-Breaker: Jika Indeks 0 diminta namun token MapTiler kosong, langsung lompat ke Indeks 1
+    // Smart Circuit-Breaker: Saat awal aplikasi dibuka (belum ada token pribadi di localStorage),
+    // langsung gunakan Indeks 1 (OSM Gratis) tanpa menyentuh server MapTiler sama sekali.
     if (providerIdx === 0) {
         const savedKey = (localStorage.getItem('bgt_maptiler_key') || '').trim();
         if (!savedKey) {
@@ -116,7 +120,8 @@ function pasangTileLayerHydra(providerIdx = 0) {
         consecutiveTileErrors++;
         if (currentProviderIndex === 0 && consecutiveTileErrors >= 2) {
             consecutiveTileErrors = 0;
-            if (window.showToast) window.showToast("Beralih ke peta cadangan (Token MapTiler limit/bermasalah).", "warning");
+            window.dispatchEvent(new CustomEvent('map-provider-fallback'));
+            if (window.showToast) window.showToast("Beralih ke peta OSM cadangan (Token MapTiler limit/bermasalah).", "warning");
             pasangTileLayerHydra(1);
         } else if (currentProviderIndex > 0 && consecutiveTileErrors > 4 && currentProviderIndex < 2) {
             consecutiveTileErrors = 0;
