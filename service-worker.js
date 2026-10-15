@@ -1,12 +1,11 @@
 // ==========================================================================
 // FILE: service-worker.js
-// FUNGSI: Pengendali Jaringan, Dual-Cache Isolasi Peta, & Notifikasi FCM
+// FUNGSI: Pengendali Jaringan, Dual-Cache Isolasi Peta, Bypass Real-Time 3 RTDB, & Notifikasi FCM
 // ==========================================================================
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.1/firebase-messaging-compat.js');
 
-// Sinkronisasi Kamus Failover (Menyelaraskan dengan credentials.js)
 const firebaseMesin = {
     utama: {
         apiKey: "AIzaSyCRIAiHzzkl-yTtC2fTbvh-vtC2jm1Sbvo",
@@ -28,10 +27,8 @@ const firebaseMesin = {
     }
 };
 
-// SWITCHER MUTLAK: Pastikan nilai ini sama dengan yang ada di credentials.js
 const MESIN_AKTIF = 'utama';
 
-// Inisialisasi Firebase murni di latar belakang menggunakan mesin dinamis
 firebase.initializeApp(firebaseMesin[MESIN_AKTIF]);
 
 const messaging = firebase.messaging();
@@ -40,14 +37,16 @@ const messaging = firebase.messaging();
 messaging.onBackgroundMessage((payload) => {
     console.log('[FCM SW] Menerima pesan latar belakang: ', payload);
 
-    const notificationTitle = payload.notification?.title || '🚨 ORDER MASUK!';
+    const notificationTitle = payload.notification?.title || payload.data?.title || '🚨 ORDER MASUK!';
     const notificationOptions = {
-        body: payload.notification?.body || 'Segera buka aplikasi untuk melihat pesanan.',
+        body: payload.notification?.body || payload.data?.body || 'Segera buka aplikasi untuk melihat pesanan.',
         icon: './assets/icon-192.png',
         badge: './assets/icon-192.png',
-        vibrate: [500, 200, 500, 200, 500, 200, 500],
+        tag: payload.data?.idTiket || 'bgt-order-alert',
+        renotify: true,
+        vibrate: [600, 200, 600, 200, 800, 200, 600],
         requireInteraction: true,
-        data: payload.data
+        data: payload.data || {}
     };
 
     self.registration.showNotification(notificationTitle, notificationOptions);
@@ -56,24 +55,25 @@ messaging.onBackgroundMessage((payload) => {
 // Aksi ketika notifikasi diklik oleh pengemudi
 self.addEventListener('notificationclick', (event) => {
     event.notification.close();
+    const notifData = event.notification.data || {};
 
     event.waitUntil(
         clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
             for (let i = 0; i < windowClients.length; i++) {
                 const client = windowClients[i];
                 if (client.url && 'focus' in client) {
+                    client.postMessage({ type: 'BGT_FCM_ORDER_CLICK', data: notifData });
                     return client.focus();
                 }
             }
             if (clients.openWindow) {
-                return clients.openWindow('/');
+                return clients.openWindow('./index.html');
             }
         })
     );
 });
 
-// SPESIFIKASI 1.2: Isolasi Cache Statis dan Cache Tile Peta
-const CACHE_STATIC = 'bagantara-driver-v7-static';
+const CACHE_STATIC = 'bagantara-driver-v8-static';
 const CACHE_TILES = 'bagantara-map-tiles-v1';
 
 const ASSETS_TO_CACHE = [
@@ -114,7 +114,6 @@ const ASSETS_TO_CACHE = [
     './assets/pin-gps.png'
 ];
 
-// 1. Proses Instalasi Mesin PWA
 self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_STATIC).then((cache) => {
@@ -125,7 +124,6 @@ self.addEventListener('install', (event) => {
     self.skipWaiting();
 });
 
-// 2. Pembersihan Cache Lama dengan Mempertahankan CACHE_STATIC & CACHE_TILES
 self.addEventListener('activate', (event) => {
     event.waitUntil(
         caches.keys().then((cacheNames) => {
@@ -142,25 +140,26 @@ self.addEventListener('activate', (event) => {
     self.clients.claim();
 });
 
-// 3. Strategi Fetch Hibrida: Pure Cache-First (Tile Peta) & Stale-While-Revalidate (Aset Statis)
 self.addEventListener('fetch', (event) => {
     if (event.request.method !== 'GET') return;
 
     const reqUrl = event.request.url;
 
-    // FILTER MUTLAK: Abaikan Cloudinary, Ipify, & Firebase Database/Firestore API
-    if (reqUrl.includes('firestore.googleapis.com') ||
+    // FILTER MUTLAK: Abaikan futaqi-ali, chatting-88040, bagantara-core, OSRM, Cloudinary, Ipify, & Firestore API agar selalu 100% Real-Time
+    if (reqUrl.includes('futaqi-ali') ||
+        reqUrl.includes('chatting-88040') ||
+        reqUrl.includes('bagantara-core') ||
+        reqUrl.includes('firestore.googleapis.com') ||
         reqUrl.includes('firebasedatabase.app') ||
+        reqUrl.includes('project-osrm.org') ||
         reqUrl.includes('cloudinary.com') ||
         reqUrl.includes('ipify.org')) {
         return;
     }
 
-    // SPESIFIKASI 1.2 & 4: KEY-AGNOSTIC PURE CACHE-FIRST untuk Peta OSM, ArcGIS, & MapTiler BYOK
     if (reqUrl.includes('api.maptiler.com') ||
         reqUrl.includes('arcgisonline.com') ||
         reqUrl.includes('tile.openstreetmap')) {
-        // Lewati cache untuk pre-flight validator token (cache: 'no-store' atau tile uji /256/0/0/0.png)
         if (event.request.cache === 'no-store' || reqUrl.includes('/256/0/0/0.png')) {
             return;
         }
@@ -195,7 +194,6 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Strategi Stale-While-Revalidate untuk Aset Statis Aplikasi
     event.respondWith(
         caches.match(event.request).then((cachedResponse) => {
             const fetchPromise = fetch(event.request).then((networkResponse) => {
