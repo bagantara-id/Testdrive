@@ -13,11 +13,10 @@
 .ring-red { border: 2px solid transparent; border-top: 2px solid rgba(239, 68, 68, 0.85); border-left: 2px solid rgba(239, 68, 68, 0.85); animation: spin-slow 12s linear infinite; }
 .logo-breathe { animation: breathe-sharp 4s ease-in-out infinite; }
 
-/* 1. TEMA MALAM (Default) Peta Leaflet */
-body:not(.theme-light) .leaflet-layer { filter: invert(95%) hue-rotate(205deg) brightness(115%) contrast(110%) sepia(20%) saturate(1.2) !important; }
-
-/* 2. TEMA SIANG Peta Leaflet */
-body.theme-light .leaflet-layer { filter: brightness(1.03) contrast(1.15) saturate(0.4) hue-rotate(10deg) !important; }
+/* 1. TEMA MALAM & SIANG PETA LEAFLET (0% GPU Filter pada CartoDB Native, Aktif Hanya Saat Fallback) */
+.leaflet-layer { filter: none !important; }
+body:not(.theme-light) #map.map-fallback-filter .leaflet-layer { filter: invert(95%) hue-rotate(205deg) brightness(115%) contrast(110%) sepia(20%) saturate(1.2) !important; }
+body.theme-light #map.map-fallback-filter .leaflet-layer { filter: brightness(1.03) contrast(1.15) saturate(0.4) hue-rotate(10deg) !important; }
 
 /* 3. Z-INDEX MUTLAK (Membebaskan Tombol Peta) */
 .header-container, header, [id*="header"], .btn-database, .fa-bars, .fa-server { position: relative !important; z-index: 9999999 !important; pointer-events: auto !important; }

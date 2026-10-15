@@ -1,9 +1,6 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 /* ==========================================================================
-   TEMA UTAMA (Profesional Navy & Gold)
+   FILE: css/style.css
+   TEMA UTAMA (Profesional Navy & Gold - Pure CSS Tanpa Direktif Unused)
    ========================================================================== */
 :root {
     --theme-base: #0a1128;
@@ -63,9 +60,10 @@ body.theme-light .bgt-toggle-track { background-color: #cbd5e1; box-shadow: inse
 .custom-checkbox:checked { background: var(--theme-gold-dim); border-color: var(--theme-gold); }
 .custom-checkbox:checked::after { content: '\f00c'; font-family: "Font Awesome 6 Free"; font-weight: 900; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--theme-gold); font-size: 10px; }
 
-/* TEMA PETA OSM */
+/* TEMA PETA (0% GPU FILTER DEFAULT - HANYA AKTIF PADA .map-fallback-filter) */
 .leaflet-container { background: #0a1128 !important; font-family: 'Plus Jakarta Sans', sans-serif !important; }
-.leaflet-layer { filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(110%) saturate(80%); transition: filter 0.5s ease; }
+.leaflet-layer { filter: none; transition: filter 0.5s ease; }
+#map.map-fallback-filter .leaflet-layer { filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(110%) saturate(80%); }
 .leaflet-control-attribution, .leaflet-control-zoom { display: none !important; }
 
 @keyframes spinSlow { 100% { transform: rotate(360deg); } }
@@ -73,7 +71,8 @@ body.theme-light .bgt-toggle-track { background-color: #cbd5e1; box-shadow: inse
 
 /* TEMA TERANG OTOMATIS & SMART FIELDS */
 body.theme-light { --theme-base: #f8fafc; --theme-panel: rgba(255, 255, 255, 0.95); --theme-gold: #b48545; --border-color: rgba(0, 0, 0, 0.08); color: #1e293b; }
-body.theme-light .leaflet-layer { filter: grayscale(10%) contrast(105%) brightness(98%) !important; }
+body.theme-light .leaflet-container { background: #e2e8f0 !important; }
+body.theme-light #map.map-fallback-filter .leaflet-layer { filter: grayscale(10%) contrast(105%) brightness(98%) !important; }
 body.theme-light .input-field { background: rgba(0,0,0,0.03); color: #0f172a; }
 body.theme-light .panel-card { box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08); border-color: rgba(0,0,0,0.05); }
 body.theme-light .bg-theme-base\/95 { background-color: rgba(255, 255, 255, 0.95) !important; border-top-color: rgba(0, 0, 0, 0.08) !important; box-shadow: 0 -5px 20px rgba(0,0,0,0.03); }
@@ -136,58 +135,7 @@ body.theme-light .slider-tactical::-webkit-slider-thumb {
     box-shadow: 6px 6px 12px rgba(0, 0, 0, 0.8), 
                -2px -2px 8px rgba(255, 255, 255, 0.03),
                inset 0 0 10px rgba(197, 168, 128, 0.05) !important;
-    color: rgba(197, 168, 128, 0.6) !important; /* Emas Redup Khas Bagantara */
-}
-.btn-power-idle:active {
-    box-shadow: inset 4px 4px 10px rgba(0, 0, 0, 0.8), 
-               inset -2px -2px 5px rgba(255, 255, 255, 0.02) !important;
-    color: rgba(197, 168, 128, 0.9) !important;
-}
-
-/* ==========================================================================
-   TOMBOL POWER KOKPIT (ESTETIKA 3D & GLOW - OFFLINE MODE)
-   ========================================================================== */
-.btn-power-idle {
-    background: linear-gradient(145deg, #0a0f1a, #030712) !important;
-    border: 1px solid rgba(197, 168, 128, 0.2) !important;
-    box-shadow: 6px 6px 12px rgba(0, 0, 0, 0.8), 
-               -2px -2px 8px rgba(255, 255, 255, 0.03),
-               inset 0 0 10px rgba(197, 168, 128, 0.05) !important;
-    color: rgba(197, 168, 128, 0.6) !important; /* Emas Redup Khas Bagantara */
-}
-.btn-power-idle:active {
-    box-shadow: inset 4px 4px 10px rgba(0, 0, 0, 0.8), 
-               inset -2px -2px 5px rgba(255, 255, 255, 0.02) !important;
-    color: rgba(197, 168, 128, 0.9) !important;
-}
-
-/* ==========================================================================
-   TOMBOL POWER KOKPIT (ESTETIKA 3D & GLOW - OFFLINE MODE)
-   ========================================================================== */
-.btn-power-idle {
-    background: linear-gradient(145deg, #0a0f1a, #030712) !important;
-    border: 1px solid rgba(197, 168, 128, 0.2) !important;
-    box-shadow: 6px 6px 12px rgba(0, 0, 0, 0.8), 
-               -2px -2px 8px rgba(255, 255, 255, 0.03),
-               inset 0 0 10px rgba(197, 168, 128, 0.05) !important;
-    color: rgba(197, 168, 128, 0.6) !important; /* Emas Redup Khas Bagantara */
-}
-.btn-power-idle:active {
-    box-shadow: inset 4px 4px 10px rgba(0, 0, 0, 0.8), 
-               inset -2px -2px 5px rgba(255, 255, 255, 0.02) !important;
-    color: rgba(197, 168, 128, 0.9) !important;
-}
-
-/* ==========================================================================
-   TOMBOL POWER KOKPIT (ESTETIKA 3D & GLOW - OFFLINE MODE)
-   ========================================================================== */
-.btn-power-idle {
-    background: linear-gradient(145deg, #0a0f1a, #030712) !important;
-    border: 1px solid rgba(197, 168, 128, 0.2) !important;
-    box-shadow: 6px 6px 12px rgba(0, 0, 0, 0.8), 
-               -2px -2px 8px rgba(255, 255, 255, 0.03),
-               inset 0 0 10px rgba(197, 168, 128, 0.05) !important;
-    color: rgba(197, 168, 128, 0.6) !important; /* Emas Redup Khas Bagantara */
+    color: rgba(197, 168, 128, 0.6) !important;
 }
 .btn-power-idle:active {
     box-shadow: inset 4px 4px 10px rgba(0, 0, 0, 0.8), 
