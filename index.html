@@ -233,10 +233,16 @@
                         <button class="smart-btn-toggle"><i class="fa-solid fa-lock"></i></button>
                     </div>
 
-                    <div class="input-wrapper smart-field-container w-full">
-                        <i class="fa-solid fa-key input-icon"></i>
-                        <input type="text" id="dash-map-key" class="input-field smart-input smart-locked" placeholder="Token MapTiler (Opsional / Pribadi)" disabled autocomplete="off" spellcheck="false">
-                        <button class="smart-btn-toggle"><i class="fa-solid fa-lock"></i></button>
+                    <div class="border border-white/10 rounded-lg p-3 bg-black/20">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-[0.65rem] text-gray-400 uppercase font-bold tracking-wider"><i class="fa-solid fa-map text-theme-gold mr-1"></i> Mesin Peta (BYOK)</span>
+                            <span id="map-key-status-badge" class="font-mono font-bold text-[0.6rem] bg-blue-500/15 text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded">DEFAULT: OSM GRATIS</span>
+                        </div>
+                        <div class="input-wrapper smart-field-container w-full" style="margin-bottom: 0;">
+                            <i class="fa-solid fa-key input-icon"></i>
+                            <input type="text" id="dash-map-key" class="input-field smart-input smart-locked font-mono text-xs" placeholder="Kosong = Peta OSM (Isi Token MapTiler Pribadi)" disabled autocomplete="off" spellcheck="false">
+                            <button class="smart-btn-toggle"><i class="fa-solid fa-lock"></i></button>
+                        </div>
                     </div>
                     
                     <button id="btn-save-settings" class="btn-primary w-full mt-2 text-sm flex justify-center items-center gap-2 transition-all cursor-pointer">

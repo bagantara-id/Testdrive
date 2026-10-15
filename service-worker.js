@@ -156,7 +156,7 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // SPESIFIKASI 1.2 & 4: KEY-AGNOSTIC PURE CACHE-FIRST untuk Multi-CDN Tile Peta & MapTiler BYOK
+    // SPESIFIKASI 1.2 & 4: KEY-AGNOSTIC PURE CACHE-FIRST untuk Peta OSM, ArcGIS, & MapTiler BYOK
     if (reqUrl.includes('api.maptiler.com') ||
         reqUrl.includes('arcgisonline.com') ||
         reqUrl.includes('tile.openstreetmap')) {
