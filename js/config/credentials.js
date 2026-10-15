@@ -1,6 +1,6 @@
 // ==========================================================================
 // FILE: js/config/credentials.js
-// FUNGSI: Gudang Kredensial Firebase (Pusat Failover/Backup)
+// FUNGSI: Gudang Kredensial 3 Mesin Firebase (Utama GPS, Chatting P2P, & Radar Tiket)
 // ==========================================================================
 
 const firebaseMesin = {
@@ -32,6 +32,16 @@ const firebaseMesin = {
         storageBucket: "chatting-88040.firebasestorage.app",
         messagingSenderId: "252383215816",
         appId: "1:252383215816:web:e029860517ce1ec77ea5fd"
+    },
+
+    radar: {
+        apiKey: "AIzaSyBbG-pk2n3cJ09-egduIDhmVTS04yhX0jM",
+        authDomain: "futaqi-ali.firebaseapp.com",
+        databaseURL: "https://futaqi-ali-default-rtdb.asia-southeast1.firebasedatabase.app",
+        projectId: "futaqi-ali",
+        storageBucket: "futaqi-ali.firebasestorage.app",
+        messagingSenderId: "77087108301",
+        appId: "1:77087108301:web:682924ffc170f789870d84"
     }
 };
 
@@ -40,3 +50,4 @@ const MESIN_AKTIF = 'utama';
 
 export const configAktif = firebaseMesin[MESIN_AKTIF];
 export const configChat = firebaseMesin['chatting'];
+export const configRadar = firebaseMesin['radar'];
