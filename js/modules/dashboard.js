@@ -1,11 +1,12 @@
 // ==========================================================================
 // FILE: js/modules/dashboard.js
-// FUNGSI: Logika Operasional Antarmuka & Smart Fields (Sinkronisasi Event Delta-Split)
+// FUNGSI: Logika Operasional Antarmuka, Smart Fields, & Sinkronisasi Cache Profil 7 Hari
 // ==========================================================================
 
-import { auth, dbFirestore } from '../core/firebase-config.js';
-import { toggleBiometrikManual } from '../core/auth.js';
+import { auth } from '../core/firebase-config.js';
+import { toggleBiometrikManual, perbaruiCacheProfilTerverifikasi } from '../core/auth.js';
 import { inisialisasiPeta, segarkanPeta } from './gps-engine.js';
+import { inisialisasiInboxChat } from '../../chat/app-chat.js';
 
 let kategoriArmada = 'Motor';
 
@@ -41,7 +42,6 @@ function sinkronisasiTampilanTokenPeta(statusOverride = null) {
     const elMapKey = document.getElementById('dash-map-key');
     const elBadge = document.getElementById('map-key-status-badge');
 
-    // Selalu cetak token yang benar-benar tersimpan di memori HP ke dalam kolom input
     if (elMapKey) {
         elMapKey.value = savedMapKey;
     }
@@ -67,7 +67,6 @@ window.addEventListener('map-provider-fallback', () => {
     sinkronisasiTampilanTokenPeta('FALLBACK_LIMIT');
 });
 
-// FUNGSI HYDRATION (MENYEDOT DATA DARI MEMORI HP SECARA INSTAN)
 export function hydrateUI() {
     const savedKategori = localStorage.getItem('bgt_driver_kategori');
     const isMobil = savedKategori ? (savedKategori === 'Mobil') : (kategoriArmada === 'Mobil');
@@ -158,10 +157,24 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
             const tgtEl = document.getElementById(target);
             if (tgtEl) tgtEl.classList.remove('hidden-state');
             if (target === 'panel-ops') sinkronisasiTampilanTokenPeta();
+            if (target === 'panel-inbox') {
+                // Tarik daftar inbox_mitra menggunakan REST fetch sekali jalan (0 WebSocket permanen)
+                inisialisasiInboxChat();
+            }
             kunciSemuaSmartFields();
             floaters.forEach(id => { const el = document.getElementById(id); if (el) el.classList.add('hidden-state'); });
         } else {
-            floaters.forEach(id => { const el = document.getElementById(id); if (el) el.classList.remove('hidden-state'); });
+            floaters.forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (id === 'btn-recenter-fisik') {
+                    if (window.__BGT_TELEMETRY_CACHE && window.__BGT_TELEMETRY_CACHE.mode === 'standby') {
+                        el.classList.remove('hidden-state');
+                    }
+                } else {
+                    el.classList.remove('hidden-state');
+                }
+            });
         }
     });
 });
@@ -174,7 +187,17 @@ document.querySelectorAll('.btn-close-panel').forEach(btn => {
         if (mapBtn) mapBtn.classList.replace('text-gray-500', 'text-theme-gold');
 
         const floaters = ['btn-telemetry-hud', 'btn-power', 'btn-recenter', 'btn-recenter-fisik'];
-        floaters.forEach(id => { const el = document.getElementById(id); if (el) el.classList.remove('hidden-state'); });
+        floaters.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (id === 'btn-recenter-fisik') {
+                if (window.__BGT_TELEMETRY_CACHE && window.__BGT_TELEMETRY_CACHE.mode === 'standby') {
+                    el.classList.remove('hidden-state');
+                }
+            } else {
+                el.classList.remove('hidden-state');
+            }
+        });
     });
 });
 
@@ -245,10 +268,8 @@ async function muatDataPengemudi(data) {
     hydrateUI();
 
     try {
+        // Inisialisasi peta (Radar dbRadar futaqi-ali akan otomatis dinyalakan oleh gps-engine.js hanya saat status Online aktif/standby)
         inisialisasiPeta();
-        import('../../chat/radar-tiket.js')
-            .then(radar => radar.hidupkanRadar(auth.currentUser.uid))
-            .catch(() => console.warn("[ISOLASI] Modul Radar tidak terpasang."));
     } catch (err) { console.error("[SISTEM] Gagal inisialisasi peta:", err); }
 }
 
@@ -337,7 +358,6 @@ if (btnSave) {
         kunciSemuaSmartFields();
 
         try {
-            // SPESIFIKASI BYOK MAPTILER: Pre-Flight Token Validator (Murni Lokal di Memori HP, 0 Payload RTDB)
             const elMapKey = document.getElementById('dash-map-key');
             const inputKey = elMapKey ? elMapKey.value.trim() : '';
             const savedMapKey = (localStorage.getItem('bgt_maptiler_key') || '').trim();
@@ -371,7 +391,6 @@ if (btnSave) {
                     pesanToastPeta = 'Token MapTiler tidak valid atau kuota habis.';
                 }
             } else {
-                // Token tidak berubah, pastikan tetap tercetak di kolom input dan status badge sinkron
                 sinkronisasiTampilanTokenPeta();
             }
 
@@ -387,7 +406,6 @@ if (btnSave) {
             window.__BGT_MIN_TARIF = parseInt(tarif);
             window.__BGT_AGENDA_INFO = info;
 
-            // SPESIFIKASI 2.1: Picu event ops-settings-saved agar gps-engine melakukan sinkronisasi penuh ke RTDB jika sedang online
             window.dispatchEvent(new CustomEvent('ops-settings-saved', { detail: newSettings }));
 
             btnSave.classList.remove('opacity-80', 'cursor-not-allowed');
@@ -469,6 +487,9 @@ if (btnSaveProfile) {
 
             if (!response.ok) throw new Error(`Server menolak akses. Status: ${response.status}`);
 
+            // Sinkronkan juga ke cache profil 7 hari di localStorage
+            perbaruiCacheProfilTerverifikasi({ kendaraan: kendaraan, plat: plat, wa: wa });
+
             btnSaveProfile.classList.remove('opacity-80', 'cursor-not-allowed');
             btnSaveProfile.classList.add('btn-state-success');
             btnSaveProfile.innerHTML = '<i class="fa-solid fa-check"></i> PROFIL TERSIMPAN ✓';
@@ -498,6 +519,7 @@ if (btnBukaChat) {
                 document.querySelectorAll('.nav-btn').forEach(b => b.classList.replace('text-theme-gold', 'text-gray-500'));
                 btnBukaChat.classList.replace('text-gray-500', 'text-theme-gold');
                 document.querySelectorAll('.panel-overlay').forEach(p => p.classList.add('hidden-state'));
+                inisialisasiInboxChat();
             }
         } catch (err) { window.alert("Sistem Komunikasi (Radar) luring.", "info"); }
     });

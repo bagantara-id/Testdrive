@@ -1,13 +1,16 @@
 // ==========================================================================
 // FILE: js/modules/gps-engine.js
-// FUNGSI: Mesin Peta Hydra Multi-CDN, Transmisi Delta-Split, & Geofencing Taktis
+// FUNGSI: Mesin Peta Hydra Multi-CDN, Transmisi Delta-Split, Geofencing Taktis,
+//         Rute Jalan Raya OSRM (Inovasi 3), OLED Blackout (Inovasi 4), & Wake-Lock (Inovasi 5)
 // ==========================================================================
 
 import { auth } from '../core/firebase-config.js';
 import { hitungJarakHaversine, encodeGeohash, getTrueTime, hitungBearingKinetik } from '../utils/math-engine.js';
 import { mintaIzinPushNotifikasi } from '../core/auth.js';
+import { hidupkanRadar, matikanRadar } from '../../chat/radar-tiket.js';
 
 export const INTERVAL_SINKRONISASI_AKTIF = 5000;
+const OLED_IDLE_TIMEOUT_MS = 60000; // 60 Detik Inaktivitas pada Mode Mangkal (Standby)
 
 window.__BGT_TELEMETRY_CACHE = window.__BGT_TELEMETRY_CACHE || { connected: false, accuracy: 0, jarak: 0, txTime: Date.now() };
 
@@ -39,6 +42,305 @@ let currentRadiusKm = 7.0;
 let isLightModeGlobal = false;
 let koordinatLokal = null;
 let isGeofenceValid = true;
+
+// Variabel Inovasi 3: Layer Rute Jalan Raya OSRM
+let orderRouteLayer = null;
+let orderPickupMarker = null;
+let orderDropoffMarker = null;
+let orderMultiMarkers = [];
+
+// Variabel Inovasi 4: Mode Hantu Penghemat Baterai (OLED Tactical Blackout)
+let oledInactivityTimer = null;
+let oledClockInterval = null;
+let isOledBlackoutActive = false;
+
+// Variabel Inovasi 5: Kunci Layar Anti-Mati (Screen Wake-Lock API)
+let wakeLockSentinel = null;
+
+// ==========================================================================
+// INOVASI 5: KUNCI LAYAR ANTI-MATI (SCREEN WAKE-LOCK API)
+// ==========================================================================
+export async function aktifkanWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    try {
+        if (wakeLockSentinel && !wakeLockSentinel.released) return;
+        wakeLockSentinel = await navigator.wakeLock.request('screen');
+        wakeLockSentinel.addEventListener('release', () => {
+            wakeLockSentinel = null;
+        });
+    } catch (err) {
+        // Abaikan jika browser menolak karena baterai sangat lemah atau tab tersembunyi
+    }
+}
+
+export async function lepaskanWakeLock() {
+    try {
+        if (wakeLockSentinel) {
+            await wakeLockSentinel.release();
+            wakeLockSentinel = null;
+        }
+    } catch (err) {
+        wakeLockSentinel = null;
+    }
+}
+
+// ==========================================================================
+// INOVASI 4: MODE HANTU PENGHEMAT BATERAI (OLED TACTICAL BLACKOUT)
+// ==========================================================================
+function formatCountdownMangkal(expiresAt) {
+    if (!expiresAt) return "00:00:00";
+    const sisaMs = Math.max(0, expiresAt - getTrueTime());
+    const totalDetik = Math.floor(sisaMs / 1000);
+    const jam = String(Math.floor(totalDetik / 3600)).padStart(2, '0');
+    const menit = String(Math.floor((totalDetik % 3600) / 60)).padStart(2, '0');
+    const detik = String(totalDetik % 60).padStart(2, '0');
+    return `${jam}:${menit}:${detik}`;
+}
+
+function perbaruiTampilanJamOLED() {
+    const elClock = document.getElementById('oled-clock-time');
+    const elCountdown = document.getElementById('oled-standby-countdown');
+    const elBox = document.getElementById('oled-content-box');
+
+    const now = new Date();
+    if (elClock) {
+        elClock.innerText = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+    if (elCountdown) {
+        const exp = window.__BGT_TELEMETRY_CACHE ? window.__BGT_TELEMETRY_CACHE.expiresAt : null;
+        elCountdown.innerText = formatCountdownMangkal(exp);
+    }
+    // Pergeseran mikro anti-burn-in setiap menit
+    if (elBox && now.getSeconds() === 0) {
+        const shiftX = Math.floor(Math.random() * 16) - 8;
+        const shiftY = Math.floor(Math.random() * 24) - 12;
+        elBox.style.transform = `translate(${shiftX}px, ${shiftY}px)`;
+    }
+}
+
+function tampilkanLayarHitamOLED() {
+    if (!isSystemOnline || currentMode !== 'standby') return;
+    const modalSergap = document.getElementById('bgt-order-intercept-modal');
+    if (modalSergap && !modalSergap.classList.contains('hidden-state')) return;
+
+    const overlay = document.getElementById('oled-blackout-overlay');
+    if (!overlay) return;
+
+    isOledBlackoutActive = true;
+    overlay.classList.remove('hidden-state');
+    perbaruiTampilanJamOLED();
+
+    if (oledClockInterval) clearInterval(oledClockInterval);
+    oledClockInterval = setInterval(perbaruiTampilanJamOLED, 1000);
+}
+
+export function bangunkanLayarOLED() {
+    if (oledInactivityTimer) {
+        clearTimeout(oledInactivityTimer);
+        oledInactivityTimer = null;
+    }
+    if (oledClockInterval) {
+        clearInterval(oledClockInterval);
+        oledClockInterval = null;
+    }
+    if (isOledBlackoutActive) {
+        isOledBlackoutActive = false;
+        const overlay = document.getElementById('oled-blackout-overlay');
+        if (overlay) overlay.classList.add('hidden-state');
+    }
+    if (isSystemOnline && currentMode === 'standby') {
+        oledInactivityTimer = setTimeout(tampilkanLayarHitamOLED, OLED_IDLE_TIMEOUT_MS);
+    }
+}
+
+function matikanPemantauOLED() {
+    if (oledInactivityTimer) {
+        clearTimeout(oledInactivityTimer);
+        oledInactivityTimer = null;
+    }
+    if (oledClockInterval) {
+        clearInterval(oledClockInterval);
+        oledClockInterval = null;
+    }
+    isOledBlackoutActive = false;
+    const overlay = document.getElementById('oled-blackout-overlay');
+    if (overlay) overlay.classList.add('hidden-state');
+}
+
+window.bangunkanLayarOLED = bangunkanLayarOLED;
+
+['touchstart', 'mousedown', 'keydown', 'pointerdown'].forEach(evtName => {
+    document.addEventListener(evtName, () => {
+        if (isSystemOnline && currentMode === 'standby') {
+            bangunkanLayarOLED();
+        }
+    }, { passive: true });
+});
+
+// ==========================================================================
+// INOVASI 3: GARIS RUTE JALAN RAYA OSRM GRATIS DI PETA DRIVER
+// ==========================================================================
+function parseKoordinatTiket(coordInput) {
+    if (!coordInput) return null;
+    if (typeof coordInput === 'object' && coordInput.lat !== undefined && coordInput.lng !== undefined) {
+        const lat = parseFloat(coordInput.lat);
+        const lng = parseFloat(coordInput.lng);
+        if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
+    }
+    if (typeof coordInput === 'string') {
+        const parts = coordInput.split(',').map(s => parseFloat(s.trim()));
+        if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            return { lat: parts[0], lng: parts[1] };
+        }
+    }
+    return null;
+}
+
+export function bersihkanRutePesanan() {
+    if (!mapSystem) return;
+    if (orderRouteLayer) {
+        mapSystem.removeLayer(orderRouteLayer);
+        orderRouteLayer = null;
+    }
+    if (orderPickupMarker) {
+        mapSystem.removeLayer(orderPickupMarker);
+        orderPickupMarker = null;
+    }
+    if (orderDropoffMarker) {
+        mapSystem.removeLayer(orderDropoffMarker);
+        orderDropoffMarker = null;
+    }
+    if (Array.isArray(orderMultiMarkers) && orderMultiMarkers.length > 0) {
+        orderMultiMarkers.forEach(m => {
+            try { mapSystem.removeLayer(m); } catch (e) {}
+        });
+        orderMultiMarkers = [];
+    }
+    const btnClear = document.getElementById('btn-clear-route');
+    if (btnClear) btnClear.classList.add('hidden-state');
+}
+
+export async function gambarRutePesananOSRM(tiket) {
+    if (!mapSystem || !tiket) return;
+    bersihkanRutePesanan();
+
+    const pickup = parseKoordinatTiket(tiket.pickup_coord);
+    const dropoff = parseKoordinatTiket(tiket.dropoff_coord);
+    if (!pickup) return;
+
+    let driverPos = null;
+    if (koordinatLokal && koordinatLokal.coords) {
+        driverPos = { lat: koordinatLokal.coords.latitude, lng: koordinatLokal.coords.longitude };
+    } else if (driverMarker) {
+        const ll = driverMarker.getLatLng();
+        driverPos = { lat: ll.lat, lng: ll.lng };
+    } else if (lastCoord) {
+        driverPos = { lat: lastCoord.lat, lng: lastCoord.lng };
+    }
+
+    const waypoints = [];
+    if (driverPos) waypoints.push(driverPos);
+    waypoints.push(pickup);
+
+    if (Array.isArray(tiket.multi_dropoffs)) {
+        tiket.multi_dropoffs.forEach(pt => {
+            const parsedPt = parseKoordinatTiket(pt);
+            if (parsedPt) waypoints.push(parsedPt);
+        });
+    }
+
+    if (dropoff) waypoints.push(dropoff);
+
+    // Pasang Marker Jemput, Multi-Stop, & Tujuan
+    const pickupIcon = L.divIcon({
+        className: 'bgt-route-pin-pickup',
+        html: `<div style="background:#10b981; color:#030712; width:30px; height:30px; border-radius:50%; border:2px solid #ffffff; display:flex; align-items:center; justify-content:center; font-weight:900; box-shadow:0 4px 12px rgba(16,185,129,0.7);"><i class="fa-solid fa-person-hail"></i></div>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15]
+    });
+    orderPickupMarker = L.marker([pickup.lat, pickup.lng], { icon: pickupIcon })
+        .bindPopup(`<b>Titik Jemput:</b><br>${String(tiket.pickup_alamat || 'Lokasi Penumpang')}`)
+        .addTo(mapSystem);
+
+    if (Array.isArray(tiket.multi_dropoffs)) {
+        tiket.multi_dropoffs.forEach((pt, idx) => {
+            const parsedPt = parseKoordinatTiket(pt);
+            if (parsedPt) {
+                const stopIcon = L.divIcon({
+                    className: 'bgt-route-pin-stop',
+                    html: `<div style="background:#f59e0b; color:#030712; width:26px; height:26px; border-radius:50%; border:2px solid #ffffff; display:flex; align-items:center; justify-content:center; font-size:0.7rem; font-weight:900; box-shadow:0 4px 10px rgba(245,158,11,0.6);">${idx + 1}</div>`,
+                    iconSize: [26, 26],
+                    iconAnchor: [13, 13]
+                });
+                const m = L.marker([parsedPt.lat, parsedPt.lng], { icon: stopIcon })
+                    .bindPopup(`<b>Pemberhentian ${idx + 1}:</b><br>${String(pt.name || 'Titik Singgah')}`)
+                    .addTo(mapSystem);
+                orderMultiMarkers.push(m);
+            }
+        });
+    }
+
+    if (dropoff) {
+        const dropoffIcon = L.divIcon({
+            className: 'bgt-route-pin-dropoff',
+            html: `<div style="background:#ef4444; color:#ffffff; width:30px; height:30px; border-radius:50%; border:2px solid #ffffff; display:flex; align-items:center; justify-content:center; font-weight:900; box-shadow:0 4px 12px rgba(239,68,68,0.7);"><i class="fa-solid fa-flag-checkered"></i></div>`,
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
+        });
+        orderDropoffMarker = L.marker([dropoff.lat, dropoff.lng], { icon: dropoffIcon })
+            .bindPopup(`<b>Titik Tujuan:</b><br>${String(tiket.dropoff_alamat || 'Tujuan Penumpang')}`)
+            .addTo(mapSystem);
+    }
+
+    const btnClear = document.getElementById('btn-clear-route');
+    if (btnClear) btnClear.classList.remove('hidden-state');
+
+    if (waypoints.length < 2) {
+        mapSystem.setView([pickup.lat, pickup.lng], 16);
+        return;
+    }
+
+    const coordQuery = waypoints.map(w => `${w.lng.toFixed(6)},${w.lat.toFixed(6)}`).join(';');
+    const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordQuery}?overview=full&geometries=geojson`;
+
+    try {
+        const ctrl = new AbortController();
+        const tId = setTimeout(() => ctrl.abort(), 5000);
+        const res = await fetch(osrmUrl, { signal: ctrl.signal });
+        clearTimeout(tId);
+        const data = await res.json();
+
+        if (data && data.code === 'Ok' && data.routes && data.routes.length > 0) {
+            const routeGeoJSON = data.routes[0].geometry;
+            orderRouteLayer = L.geoJSON(routeGeoJSON, {
+                style: {
+                    color: '#10b981',
+                    weight: 6,
+                    opacity: 0.9,
+                    lineCap: 'round',
+                    lineJoin: 'round'
+                }
+            }).addTo(mapSystem);
+
+            mapSystem.fitBounds(orderRouteLayer.getBounds(), { padding: [55, 55], maxZoom: 17 });
+            return;
+        }
+    } catch (err) {
+        // Jika OSRM timeout/gagal, gambar garis hubung taktis langsung
+    }
+
+    const latLngs = waypoints.map(w => [w.lat, w.lng]);
+    orderRouteLayer = L.polyline(latLngs, {
+        color: '#10b981',
+        weight: 4,
+        dashArray: '8, 8',
+        opacity: 0.85
+    }).addTo(mapSystem);
+    mapSystem.fitBounds(orderRouteLayer.getBounds(), { padding: [55, 55], maxZoom: 17 });
+}
+
+window.gambarRutePesananOSRM = gambarRutePesananOSRM;
+window.bersihkanRutePesanan = bersihkanRutePesanan;
 
 // ==========================================================================
 // 0. HYDRA MULTI-CDN TILE ENGINE (DEFAULT AWAL: OSM GRATIS | OPSIONAL: BYOK MAPTILER PRIBADI)
@@ -136,6 +438,20 @@ function pasangTileLayerHydra(providerIdx = 0) {
 // 1. SARAF NAVIGASI DOM & KAPSUL MIKRO
 // ==========================================================================
 function inisialisasiEventDOM() {
+    const btnClearRoute = document.getElementById('btn-clear-route');
+    if (btnClearRoute) {
+        btnClearRoute.addEventListener('click', () => {
+            bersihkanRutePesanan();
+            if (window.showToast) window.showToast("Garis rute pesanan dibersihkan dari peta.", "info");
+        });
+    }
+
+    const oledOverlay = document.getElementById('oled-blackout-overlay');
+    if (oledOverlay) {
+        oledOverlay.addEventListener('click', () => bangunkanLayarOLED());
+        oledOverlay.addEventListener('touchstart', () => bangunkanLayarOLED(), { passive: true });
+    }
+
     const btnCancelTarget = document.getElementById('btn-cancel-target');
     if (btnCancelTarget) {
         btnCancelTarget.addEventListener('click', () => {
@@ -254,8 +570,11 @@ function inisialisasiEventDOM() {
     }
 
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && currentMode === 'aktif') {
-            if (driverMarker && visualCoord) {
+        if (document.visibilityState === 'visible') {
+            if (isSystemOnline) {
+                aktifkanWakeLock();
+            }
+            if (currentMode === 'aktif' && driverMarker && visualCoord) {
                 driverMarker.setLatLng([visualCoord.lat, visualCoord.lng]);
                 const arrowElement = document.getElementById('nav-arrow');
                 if (arrowElement && visualCoord.heading !== null && !isNaN(visualCoord.heading)) {
@@ -374,6 +693,11 @@ async function periksaResureksiStatus() {
                 window.__BGT_TELEMETRY_CACHE.mode = 'standby'; window.__BGT_TELEMETRY_CACHE.expiresAt = data.expiresAt;
                 window.__BGT_TELEMETRY_CACHE.targetLat = data.lat; window.__BGT_TELEMETRY_CACHE.targetLng = data.lng;
                 window.dispatchEvent(new CustomEvent('hud-mode-update'));
+
+                // Nyalakan Radar futaqi-ali, Wake-Lock, dan Timer OLED Blackout
+                hidupkanRadar(auth.currentUser.uid);
+                aktifkanWakeLock();
+                bangunkanLayarOLED();
                 return true;
             } else if (data.isOnline && data.mode === 'standby' && data.expiresAt && data.expiresAt <= now) {
                 matikanSinkronisasi("Sesi mangkal Anda telah kedaluwarsa saat aplikasi ditutup."); return false;
@@ -668,9 +992,14 @@ if (btnPower) {
 // ==========================================================================
 function mulaiModeAktif() {
     isSystemOnline = true; isPendingPower = false; matikanProsesLatar(); currentMode = 'aktif';
+    matikanPemantauOLED();
 
     window.__BGT_TELEMETRY_CACHE.mode = 'aktif'; window.dispatchEvent(new CustomEvent('hud-mode-update'));
     updateUIState();
+
+    // Nyalakan Radar futaqi-ali & Screen Wake-Lock API
+    if (auth.currentUser) hidupkanRadar(auth.currentUser.uid);
+    aktifkanWakeLock();
 
     if (mapSystem) mapSystem.off('move', updateRadiusKeCenter);
     const uiTarget = document.getElementById('bgt-targeting-ui');
@@ -773,6 +1102,7 @@ function mulaiModeAktif() {
 
 function mulaiFasePersiapan() {
     isSystemOnline = false; isPendingPower = true;
+    matikanPemantauOLED();
     if (syncInterval) { clearInterval(syncInterval); syncInterval = null; }
     if (standbyTimeout) { clearTimeout(standbyTimeout); standbyTimeout = null; }
 
@@ -834,6 +1164,11 @@ function kunciLokasiStandby(durasiJam) {
             window.__BGT_TELEMETRY_CACHE.mode = 'standby'; window.__BGT_TELEMETRY_CACHE.expiresAt = expiresAt;
             window.__BGT_TELEMETRY_CACHE.targetLat = center.lat; window.__BGT_TELEMETRY_CACHE.targetLng = center.lng;
             window.dispatchEvent(new CustomEvent('hud-mode-update'));
+
+            // Nyalakan Radar futaqi-ali, Wake-Lock, dan Timer OLED Blackout (60 detik)
+            if (auth.currentUser) hidupkanRadar(auth.currentUser.uid);
+            aktifkanWakeLock();
+            bangunkanLayarOLED();
         } else matikanSinkronisasi("Gagal mengunci lokasi. Periksa koneksi.");
     });
 }
@@ -907,6 +1242,11 @@ function matikanProsesLatar() {
 export async function matikanSinkronisasi(pesan = "") {
     if (btnPower) { btnPower.classList.add('pointer-events-none'); btnPower.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin text-xl"></i>'; }
     if (statusText) statusText.innerHTML = '<span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></span> <span class="text-yellow-400 font-bold tracking-widest">MEMUTUS KONEKSI...</span>';
+
+    // Putus Radar futaqi-ali (goOffline(dbRadar)), lepaskan Wake-Lock, dan matikan OLED Blackout
+    matikanRadar();
+    lepaskanWakeLock();
+    matikanPemantauOLED();
 
     if (auth.currentUser) {
         try {
