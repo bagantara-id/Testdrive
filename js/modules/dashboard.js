@@ -73,6 +73,9 @@ export function hydrateUI() {
     const elTarif = document.getElementById('dash-tarif');
     if (elTarif) elTarif.value = localSettings.tarif || '';
 
+    const elMapKey = document.getElementById('dash-map-key');
+    if (elMapKey) elMapKey.value = localStorage.getItem('bgt_maptiler_key') || '';
+
     const elOpsRadius = document.getElementById('ops-slider-radius');
     const elOpsRadiusVal = document.getElementById('ops-radius-val');
     if (elOpsRadius && elOpsRadiusVal && localSettings.radius) {
@@ -303,6 +306,30 @@ if (btnSave) {
         kunciSemuaSmartFields();
 
         try {
+            // SPESIFIKASI BYOK MAPTILER: Pre-Flight Token Validator (Murni Lokal, 0 Payload RTDB)
+            const elMapKey = document.getElementById('dash-map-key');
+            const inputKey = elMapKey ? elMapKey.value.trim() : '';
+            const savedMapKey = localStorage.getItem('bgt_maptiler_key') || '';
+
+            if (inputKey === '') {
+                localStorage.removeItem('bgt_maptiler_key');
+                window.dispatchEvent(new CustomEvent('map-key-updated', { detail: { key: '' } }));
+            } else if (inputKey !== savedMapKey) {
+                try {
+                    const testRes = await fetch(`https://api.maptiler.com/maps/streets-v2/256/0/0/0.png?key=${inputKey}`, { cache: 'no-store' });
+                    if (testRes.ok && testRes.status === 200) {
+                        localStorage.setItem('bgt_maptiler_key', inputKey);
+                        window.dispatchEvent(new CustomEvent('map-key-updated', { detail: { key: inputKey } }));
+                    } else {
+                        if (elMapKey) elMapKey.value = savedMapKey;
+                        if (window.showToast) window.showToast("Token MapTiler tidak valid atau kuota habis.", "warning");
+                    }
+                } catch (mapErr) {
+                    if (elMapKey) elMapKey.value = savedMapKey;
+                    if (window.showToast) window.showToast("Token MapTiler tidak valid atau kuota habis.", "warning");
+                }
+            }
+
             const newSettings = {
                 layanan: selectedLayanan,
                 tarif: tarif,

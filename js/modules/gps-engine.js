@@ -41,13 +41,14 @@ let koordinatLokal = null;
 let isGeofenceValid = true;
 
 // ==========================================================================
-// 0. HYDRA MULTI-CDN TILE ENGINE & NATIVE THEME
+// 0. HYDRA MULTI-CDN TILE ENGINE (BYOK MAPTILER 512PX & EXTREME QUOTA SAVER)
 // ==========================================================================
 function dapatkanUrlTileProvider(index, isLight) {
     if (index === 0) {
+        const key = (localStorage.getItem('bgt_maptiler_key') || '').trim();
         return isLight
-            ? 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png'
-            : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+            ? `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=${key}`
+            : `https://api.maptiler.com/maps/streets-v2-dark/{z}/{x}/{y}.png?key=${key}`;
     } else if (index === 1) {
         return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
     } else {
@@ -67,6 +68,15 @@ function sinkronisasiFilterFallbackPeta() {
 
 function pasangTileLayerHydra(providerIdx = 0) {
     if (!mapSystem) return;
+
+    // Smart Circuit-Breaker: Jika Indeks 0 diminta namun token MapTiler kosong, langsung lompat ke Indeks 1
+    if (providerIdx === 0) {
+        const savedKey = (localStorage.getItem('bgt_maptiler_key') || '').trim();
+        if (!savedKey) {
+            return pasangTileLayerHydra(1);
+        }
+    }
+
     if (currentTileLayer) {
         mapSystem.removeLayer(currentTileLayer);
         currentTileLayer = null;
@@ -77,7 +87,26 @@ function pasangTileLayerHydra(providerIdx = 0) {
     sinkronisasiFilterFallbackPeta();
 
     const targetUrl = dapatkanUrlTileProvider(currentProviderIndex, isLightModeGlobal);
-    currentTileLayer = L.tileLayer(targetUrl, { maxZoom: 19 });
+    const tileOptions = currentProviderIndex === 0
+        ? {
+            tileSize: 512,
+            zoomOffset: -1,
+            maxNativeZoom: 17,
+            maxZoom: 19,
+            updateWhenIdle: true,
+            updateWhenZooming: false,
+            keepBuffer: 2
+        }
+        : {
+            tileSize: 256,
+            zoomOffset: 0,
+            maxNativeZoom: 18,
+            maxZoom: 19,
+            updateWhenIdle: true,
+            updateWhenZooming: false
+        };
+
+    currentTileLayer = L.tileLayer(targetUrl, tileOptions);
 
     currentTileLayer.on('tileload', () => {
         consecutiveTileErrors = 0;
@@ -85,7 +114,11 @@ function pasangTileLayerHydra(providerIdx = 0) {
 
     currentTileLayer.on('tileerror', () => {
         consecutiveTileErrors++;
-        if (consecutiveTileErrors > 4 && currentProviderIndex < 2) {
+        if (currentProviderIndex === 0 && consecutiveTileErrors >= 2) {
+            consecutiveTileErrors = 0;
+            if (window.showToast) window.showToast("Beralih ke peta cadangan (Token MapTiler limit/bermasalah).", "warning");
+            pasangTileLayerHydra(1);
+        } else if (currentProviderIndex > 0 && consecutiveTileErrors > 4 && currentProviderIndex < 2) {
             consecutiveTileErrors = 0;
             pasangTileLayerHydra(currentProviderIndex + 1);
         }
@@ -199,7 +232,15 @@ function inisialisasiEventDOM() {
     if (btnFisik) {
         btnFisik.addEventListener('click', () => {
             if (koordinatLokal && mapSystem) {
-                mapSystem.flyTo([koordinatLokal.coords.latitude, koordinatLokal.coords.longitude], 17, { animate: true, duration: 1.5 });
+                const targetLat = koordinatLokal.coords.latitude;
+                const targetLng = koordinatLokal.coords.longitude;
+                const center = mapSystem.getCenter();
+                const jarakKamera = hitungJarakHaversine(center.lat, center.lng, targetLat, targetLng);
+                if (jarakKamera > 2000) {
+                    mapSystem.setView([targetLat, targetLng], 17, { animate: false });
+                } else {
+                    mapSystem.flyTo([targetLat, targetLng], 17, { animate: true, duration: 1.5 });
+                }
                 if (window.showToast) window.showToast("Menyorot GPS Fisik Anda", "success");
             } else {
                 if (window.showToast) window.showToast("Sinyal GPS Fisik belum terkunci", "error");
@@ -235,6 +276,8 @@ window.addEventListener('theme-toggled', (e) => {
     }
     if (standbyRadiusLayer && driverMarker) validasiGeofencingSetup();
 });
+
+window.addEventListener('map-key-updated', () => pasangTileLayerHydra(0));
 
 window.addEventListener('update-global-radius', (e) => {
     currentRadiusKm = e.detail;
@@ -441,8 +484,17 @@ function nyalakanRadarGeofencingSiluman() {
 }
 
 function tetapkanPosisiPeta(lat, lng, animate = false) {
-    if (animate) mapSystem.flyTo([lat, lng], 17, { animate: true, duration: 1.5 });
-    else mapSystem.setView([lat, lng], 17);
+    if (animate && mapSystem) {
+        const center = mapSystem.getCenter();
+        const jarakKamera = hitungJarakHaversine(center.lat, center.lng, lat, lng);
+        if (jarakKamera > 2000) {
+            mapSystem.setView([lat, lng], 17, { animate: false });
+        } else {
+            mapSystem.flyTo([lat, lng], 17, { animate: true, duration: 1.5 });
+        }
+    } else if (mapSystem) {
+        mapSystem.setView([lat, lng], 17, { animate: false });
+    }
 
     if (!driverMarker) driverMarker = L.marker([lat, lng], { icon: dapatkanIkonMarker(currentMode), draggable: false }).addTo(mapSystem);
     else driverMarker.setLatLng([lat, lng]);
@@ -532,7 +584,17 @@ sinkronisasiKoneksiNative();
 if (btnRecenter) {
     btnRecenter.addEventListener('click', () => {
         if (currentMode === 'standby' || currentMode === 'persiapan') {
-            if (driverMarker && mapSystem) { mapSystem.flyTo(driverMarker.getLatLng(), 17, { animate: true, duration: 1.5 }); if (window.showToast) window.showToast("Kamera dikembalikan ke Titik Mangkal.", "success"); }
+            if (driverMarker && mapSystem) {
+                const targetPos = driverMarker.getLatLng();
+                const center = mapSystem.getCenter();
+                const jarakKamera = hitungJarakHaversine(center.lat, center.lng, targetPos.lat, targetPos.lng);
+                if (jarakKamera > 2000) {
+                    mapSystem.setView([targetPos.lat, targetPos.lng], 17, { animate: false });
+                } else {
+                    mapSystem.flyTo(targetPos, 17, { animate: true, duration: 1.5 });
+                }
+                if (window.showToast) window.showToast("Kamera dikembalikan ke Titik Mangkal.", "success");
+            }
             return;
         }
 
@@ -548,8 +610,16 @@ if (btnRecenter) {
                 },
                 err => {
                     iconRecenter.className = 'fa-solid fa-location-crosshairs text-lg pointer-events-none drop-shadow-md text-red-500';
-                    if (driverMarker && mapSystem) mapSystem.flyTo(driverMarker.getLatLng(), 17, { animate: true, duration: 1 });
-                    else if (window.showToast) window.showToast("Sinyal satelit gagal ditangkap.", "error");
+                    if (driverMarker && mapSystem) {
+                        const targetPos = driverMarker.getLatLng();
+                        const center = mapSystem.getCenter();
+                        const jarakKamera = hitungJarakHaversine(center.lat, center.lng, targetPos.lat, targetPos.lng);
+                        if (jarakKamera > 2000) {
+                            mapSystem.setView([targetPos.lat, targetPos.lng], 17, { animate: false });
+                        } else {
+                            mapSystem.flyTo(targetPos, 17, { animate: true, duration: 1 });
+                        }
+                    } else if (window.showToast) window.showToast("Sinyal satelit gagal ditangkap.", "error");
                     setTimeout(() => { iconRecenter.className = 'fa-solid fa-location-crosshairs text-lg pointer-events-none drop-shadow-md text-white'; }, 2000);
                 },
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
