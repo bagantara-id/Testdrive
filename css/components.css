@@ -1,6 +1,6 @@
 /* ==========================================================================
    FILE: css/components.css
-   FUNGSI: Sentralisasi CSS Kinetik, Overrides Peta, dan Animasi
+   FUNGSI: Sentralisasi CSS Kinetik, Overrides Peta, Animasi, & 5 Fitur Inovasi V8
    ========================================================================== */
 
 /* --- RESTORASI ANIMASI LOGIN (CYBER RING) --- */
@@ -66,4 +66,23 @@ body.theme-light .panel-overlay .panel-card .btn-logout { background-color: rgba
 .bg-slider-ticks {
     background-image: linear-gradient(to right, rgba(197,168,128,0.8) 2px, transparent 2px);
     background-size: calc(100% / 14) 100%; /* Membagi jarak akurat untuk range 1 - 15 */
+}
+
+/* ==========================================================================
+   8. INOVASI V8: MODAL SERGAP ORDER, OLED BLACKOUT, & MARKER RUTE OSRM
+   ========================================================================== */
+#oled-blackout-overlay {
+    background-color: #000000 !important;
+    touch-action: manipulation;
+}
+
+#bgt-order-intercept-modal {
+    animation: popIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.bgt-route-pin-pickup,
+.bgt-route-pin-dropoff,
+.bgt-route-pin-stop {
+    background: transparent !important;
+    border: none !important;
 }
