@@ -7,7 +7,7 @@
 
 import { dbChat, dbRadar } from './config-chat.js';
 import { configChat } from '../js/config/credentials.js';
-import { bukaRuangKomunikasi, simpanItemInboxLokal, hapusItemInboxLokal, escapeHTML, goOnline, goOffline } from './app-chat.js';
+import { bukaRuangKomunikasi, simpanItemInboxLokal, hapusItemInboxLokal, tandaiOrderSudahDiambil, escapeHTML, goOnline, goOffline } from './app-chat.js';
 import { ref, onChildAdded, remove, update, push } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
 
 let referensiRadar = null;
@@ -296,16 +296,29 @@ export function tampilkanModalSergapPesanan(idTiket, tiket) {
 
     if (elExtraInfo) {
         const extraParts = [];
+        // SYNC-02 FIX: Ekstrak objek toko_jastip { lat, lng, address, notes } dari aplikasi Publik agar tidak tampil "[object Object]"
         if (tiket.toko_jastip) {
-            extraParts.push(`<div><i class="fa-solid fa-store text-emerald-400 mr-1"></i> <b>Toko:</b> ${escapeHTML(tiket.toko_jastip)}</div>`);
+            let labelToko = '';
+            if (typeof tiket.toko_jastip === 'object') {
+                const addr = tiket.toko_jastip.address || tiket.toko_jastip.name || '';
+                const notes = tiket.toko_jastip.notes ? ` (${tiket.toko_jastip.notes})` : '';
+                labelToko = (addr + notes).trim();
+            } else {
+                labelToko = String(tiket.toko_jastip).trim();
+            }
+            if (labelToko) {
+                extraParts.push(`<div><i class="fa-solid fa-store text-emerald-400 mr-1"></i> <b>Toko:</b> ${escapeHTML(labelToko)}</div>`);
+            }
         }
         if (Array.isArray(tiket.belanjaan) && tiket.belanjaan.length > 0) {
             const totalItem = tiket.belanjaan.reduce((acc, it) => acc + (Number(it.qty) || 1), 0);
             const estBelanja = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(tiket.estimasi_belanja || 0));
             extraParts.push(`<div><i class="fa-solid fa-bag-shopping text-emerald-400 mr-1"></i> <b>Belanjaan:</b> ${totalItem} Item (Est: ${escapeHTML(estBelanja)})</div>`);
         }
-        if (Array.isArray(tiket.multi_dropoffs) && tiket.multi_dropoffs.length > 0) {
-            extraParts.push(`<div><i class="fa-solid fa-route text-amber-400 mr-1"></i> <b>Multi-Stop:</b> ${tiket.multi_dropoffs.length} Titik Singgah Tambahan</div>`);
+        // SYNC-03 FIX: Aplikasi Publik selalu mengisi multi_dropoffs minimal 1 elemen (tujuan utama).
+        // Hanya tampilkan badge Multi-Stop jika terdapat > 1 titik tujuan (titik singgah tambahan = length - 1).
+        if (Array.isArray(tiket.multi_dropoffs) && tiket.multi_dropoffs.length > 1) {
+            extraParts.push(`<div><i class="fa-solid fa-route text-amber-400 mr-1"></i> <b>Multi-Stop:</b> ${tiket.multi_dropoffs.length - 1} Titik Singgah Tambahan</div>`);
         }
         if (tiket.catatan_tambahan && String(tiket.catatan_tambahan).trim() !== '') {
             extraParts.push(`<div><i class="fa-solid fa-comment-dots text-theme-gold mr-1"></i> <b>Catatan:</b> "${escapeHTML(tiket.catatan_tambahan)}"</div>`);
@@ -380,6 +393,9 @@ async function eksekusiTerimaPesananSergap() {
     tutupModalSergap();
 
     try {
+        // Tandai di memori lokal bahwa order ini sudah diambil via Modal Sergap agar kartu katalog_order tidak menampilkan tombol ganda
+        tandaiOrderSudahDiambil(idTiket, tiket.wa_klien || '');
+
         // 2. Update status tiket di futaqi-ali menjadi ACCEPTED, lalu hapus umpan radar setelah 4 detik
         const refTiketRadar = ref(dbRadar, `radar_tiket/${uid}/${idTiket}`);
         await update(refTiketRadar, {
@@ -416,10 +432,16 @@ async function eksekusiTerimaPesananSergap() {
             waktu_diterima: Date.now()
         }).catch(() => {});
 
+        const rawWaDriver = document.getElementById('lock-wa')?.value || '';
+        const cleanWaDriver = rawWaDriver.replace(/[^0-9]/g, '').replace(/^0/, '62');
+        const teksKonfirmasi = cleanWaDriver
+            ? `Pesanan Anda telah saya terima melalui Radar Prioritas, saya segera meluncur ke titik jemput. Hubungi WA saya jika perlu: https://wa.me/${cleanWaDriver}`
+            : "Pesanan Anda telah saya terima melalui Radar Prioritas, saya segera meluncur ke titik jemput.";
+
         await push(ref(dbChat, `sesi_komunikasi/${idTiket}/pesan`), {
             pengirim: "mitra",
             tipe: "teks",
-            konten: "Pesanan Anda telah saya terima melalui Radar Prioritas, saya segera meluncur ke titik jemput.",
+            konten: teksKonfirmasi,
             waktu: Date.now(),
             status: "sent"
         }).catch(() => {});
@@ -453,15 +475,21 @@ async function eksekusiTolakPesananSergap() {
         // Hapus umpan dari futaqi-ali segera
         await remove(ref(dbRadar, `radar_tiket/${uid}/${idTiket}`)).catch(() => {});
 
-        // Kirim sinyal sistem_tolak ke penumpang di dbChat lalu bersihkan sesi & inbox
+        // SYNC-04 FIX: Update metadata_order ke REJECTED + kirim sinyal sistem_tolak agar aplikasi Publik langsung mendeteksi penolakan
         goOnline(dbChat);
-        await push(ref(dbChat, `sesi_komunikasi/${idTiket}/pesan`), {
-            pengirim: "mitra",
-            tipe: "sistem_tolak",
-            konten: "Driver menolak pesanan",
-            waktu: Date.now(),
-            status: "sent"
-        }).catch(() => {});
+        await Promise.allSettled([
+            update(ref(dbChat, `sesi_komunikasi/${idTiket}/metadata_order`), {
+                status: 'REJECTED',
+                waktu_ditolak: Date.now()
+            }),
+            push(ref(dbChat, `sesi_komunikasi/${idTiket}/pesan`), {
+                pengirim: "mitra",
+                tipe: "sistem_tolak",
+                konten: "Driver menolak pesanan",
+                waktu: Date.now(),
+                status: "sent"
+            })
+        ]);
 
         setTimeout(async () => {
             await Promise.allSettled([
@@ -521,7 +549,10 @@ export function hidupkanRadar(uid) {
         }
 
         // Cegah penulisan ulang jika tiket sudah berstatus ACCEPTED
-        if (tiket.status === 'ACCEPTED') return;
+        if (tiket.status === 'ACCEPTED') {
+            tandaiOrderSudahDiambil(idTiket, tiket.wa_klien || '');
+            return;
+        }
 
         // Simpan ke inbox_mitra menggunakan REST ringan + memori lokal (0 Koneksi WebSocket dbChat)
         const payloadInbox = {

@@ -30,6 +30,17 @@ let intervalRekamanGlobal = null;
 // Memori lokal daftar inbox (0 Koneksi WebSocket Permanen)
 let memoriInboxLokal = {};
 
+// Memori status sesi yang sudah diambil oleh Driver (mencegah tombol Terima/Tolak ganda saat katalog_order menyusul)
+const sesiOrderDiterimaMap = {};
+
+export function tandaiOrderSudahDiambil(idTiket, waKlien = '') {
+    if (!idTiket) return;
+    sesiOrderDiterimaMap[idTiket] = {
+        accepted: true,
+        wa_klien: waKlien || sesiOrderDiterimaMap[idTiket]?.wa_klien || ''
+    };
+}
+
 // ==========================================================================
 // 0. SANITASI ANTI-XSS (SPESIFIKASI 3.4)
 // ==========================================================================
@@ -200,6 +211,14 @@ export function bukaRuangKomunikasi(idTiketMasuk, namaKlien = "Klien", tiketAwal
     idRuangObrolanAktif = idTiketMasuk;
     waktuBukaRuang = Date.now();
 
+    if (tiketAwal && tiketAwal.wa_klien) {
+        if (!sesiOrderDiterimaMap[idTiketMasuk]) {
+            sesiOrderDiterimaMap[idTiketMasuk] = { accepted: false, wa_klien: tiketAwal.wa_klien };
+        } else {
+            sesiOrderDiterimaMap[idTiketMasuk].wa_klien = tiketAwal.wa_klien;
+        }
+    }
+
     const panelChat = document.getElementById('panel-komunikasi-utama');
     const titleChat = document.getElementById('chat-session-title');
     const bodyChat = document.getElementById('chat-body');
@@ -215,7 +234,35 @@ export function bukaRuangKomunikasi(idTiketMasuk, namaKlien = "Klien", tiketAwal
     }
 
     pasangSarafInteraksi();
+
+    // SYNC-06 FIX: Pastikan listener touchmove/touchend dokumen terpasang kembali saat chat dibuka ulang
+    if (window.DriverChat_handleTouchMove) {
+        document.removeEventListener('touchmove', window.DriverChat_handleTouchMove);
+        document.removeEventListener('mousemove', window.DriverChat_handleTouchMove);
+        document.addEventListener('touchmove', window.DriverChat_handleTouchMove, { passive: false });
+        document.addEventListener('mousemove', window.DriverChat_handleTouchMove);
+    }
+    if (window.DriverChat_handleTouchEnd) {
+        document.removeEventListener('touchend', window.DriverChat_handleTouchEnd);
+        document.removeEventListener('mouseup', window.DriverChat_handleTouchEnd);
+        document.addEventListener('touchend', window.DriverChat_handleTouchEnd);
+        document.addEventListener('mouseup', window.DriverChat_handleTouchEnd);
+    }
+
     mulaiDengarPesan();
+}
+
+function renderStatusOrderDiambilHTML(noWaKlien) {
+    const cleanWa = String(noWaKlien || '').replace(/[^0-9]/g, '').replace(/^0/, '62');
+    const safeWaKlien = encodeURIComponent(cleanWa);
+    return `
+        <div style="width:100%; display:flex; flex-direction:column; gap:8px;">
+            <div style="background:rgba(16, 185, 129, 0.15); border:1px dashed #10b981; color:#10b981; text-align:center; padding:8px; border-radius:8px; font-weight:bold; font-size:0.75rem; letter-spacing:1px;">
+                <i class="fa-solid fa-check-double"></i> ORDER DIAMBIL
+            </div>
+            ${cleanWa ? `<a href="https://wa.me/${safeWaKlien}" target="_blank" rel="noopener noreferrer" style="background:#10b981; color:#0b101a; text-align:center; padding:10px; border-radius:8px; font-weight:bold; font-size:0.75rem; text-decoration:none; display:flex; justify-content:center; align-items:center; gap:6px; box-shadow:0 4px 10px rgba(16,185,129,0.3); transition:all 0.2s;"><i class="fa-brands fa-whatsapp text-lg"></i> CHAT PENUMPANG</a>` : ''}
+        </div>
+    `;
 }
 
 function pasangSarafInteraksi() {
@@ -284,9 +331,15 @@ function pasangSarafInteraksi() {
                     const idSesi = idRuangObrolanAktif;
 
                     goOnline(dbChat);
-                    await push(ref(dbChat, `sesi_komunikasi/${idSesi}/pesan`), {
-                        pengirim: "mitra", tipe: "sistem_tolak", konten: "Driver menolak pesanan", waktu: Date.now(), status: "sent"
-                    }).catch(() => {});
+                    await Promise.allSettled([
+                        update(ref(dbChat, `sesi_komunikasi/${idSesi}/metadata_order`), {
+                            status: 'REJECTED',
+                            waktu_ditolak: Date.now()
+                        }),
+                        push(ref(dbChat, `sesi_komunikasi/${idSesi}/pesan`), {
+                            pengirim: "mitra", tipe: "sistem_tolak", konten: "Driver menolak pesanan", waktu: Date.now(), status: "sent"
+                        })
+                    ]);
 
                     hapusItemInboxLokal(uid, idSesi);
                     if (typeof window.bersihkanRutePesanan === 'function') window.bersihkanRutePesanan();
@@ -306,21 +359,18 @@ function pasangSarafInteraksi() {
             const actionArea = btnTerima.closest('.katalog-action-area');
 
             try {
-                let noWaKlien = '';
-                let dataTiketRadar = null;
+                // SYNC-05 FIX: Gunakan data-waklien langsung dari atribut kartu katalog_order (hemat 2x bacaan RTDB get())
+                let noWaKlien = actionArea ? (actionArea.getAttribute('data-waklien') || '') : '';
                 if (auth.currentUser && idRuangObrolanAktif) {
                     const uid = auth.currentUser.uid;
-                    const snapTiket = await get(ref(dbRadar, `radar_tiket/${uid}/${idRuangObrolanAktif}`)).catch(() => null);
-                    if (snapTiket && snapTiket.exists()) {
-                        dataTiketRadar = snapTiket.val();
-                        noWaKlien = dataTiketRadar.wa_klien || '';
-                    }
                     if (!noWaKlien) {
                         const snapMeta = await get(ref(dbChat, `sesi_komunikasi/${idRuangObrolanAktif}/metadata_order`)).catch(() => null);
                         if (snapMeta && snapMeta.exists()) {
                             noWaKlien = snapMeta.val().wa_klien || '';
                         }
                     }
+
+                    tandaiOrderSudahDiambil(idRuangObrolanAktif, noWaKlien);
 
                     const refRadar = ref(dbRadar, `radar_tiket/${uid}/${idRuangObrolanAktif}`);
                     await update(refRadar, { status: 'ACCEPTED', waktu_diterima: Date.now() }).catch(() => {});
@@ -331,25 +381,22 @@ function pasangSarafInteraksi() {
                         waktu_diterima: Date.now()
                     }).catch(() => {});
 
-                    if (dataTiketRadar && typeof window.gambarRutePesananOSRM === 'function') {
-                        window.gambarRutePesananOSRM(dataTiketRadar);
-                    }
+                    const waktuSekarang = Date.now();
+                    simpanItemInboxLokal(uid, idRuangObrolanAktif, {
+                        pesan_terakhir: "Pesanan diterima - Meluncur ke lokasi jemput",
+                        waktu_update: waktuSekarang
+                    });
                 }
 
                 if (actionArea) {
-                    const safeWaKlien = encodeURIComponent(noWaKlien);
-                    actionArea.innerHTML = `
-                        <div style="width:100%; display:flex; flex-direction:column; gap:8px;">
-                            <div style="background:rgba(16, 185, 129, 0.15); border:1px dashed #10b981; color:#10b981; text-align:center; padding:8px; border-radius:8px; font-weight:bold; font-size:0.75rem; letter-spacing:1px;">
-                                <i class="fa-solid fa-check-double"></i> ORDER DIAMBIL
-                            </div>
-                            ${noWaKlien ? `<a href="https://wa.me/${safeWaKlien}" target="_blank" style="background:#10b981; color:#0b101a; text-align:center; padding:10px; border-radius:8px; font-weight:bold; font-size:0.75rem; text-decoration:none; display:flex; justify-content:center; align-items:center; gap:6px; box-shadow:0 4px 10px rgba(16,185,129,0.3); transition:all 0.2s;"><i class="fa-brands fa-whatsapp text-lg"></i> CHAT PENUMPANG</a>` : ''}
-                        </div>
-                    `;
+                    actionArea.innerHTML = renderStatusOrderDiambilHTML(noWaKlien);
                 }
 
-                const waDriver = actionArea ? actionArea.getAttribute('data-wadriver') : '';
-                const pesanTeks = waDriver ? `Pesanan Anda telah saya terima, saya segera meluncur. Hubungi WA saya jika perlu: https://wa.me/${waDriver}` : "Pesanan Anda telah saya terima, saya segera meluncur.";
+                const rawWaDriver = (actionArea ? actionArea.getAttribute('data-wadriver') : '') || document.getElementById('lock-wa')?.value || '';
+                const cleanWaDriver = rawWaDriver.replace(/[^0-9]/g, '').replace(/^0/, '62');
+                const pesanTeks = cleanWaDriver
+                    ? `Pesanan Anda telah saya terima, saya segera meluncur. Hubungi WA saya jika perlu: https://wa.me/${cleanWaDriver}`
+                    : "Pesanan Anda telah saya terima, saya segera meluncur.";
                 await kirimPayloadPesan(pesanTeks, "teks");
 
             } catch (err) {
@@ -454,7 +501,8 @@ function pasangSarafInteraksi() {
         if (uiRecording) uiRecording.classList.remove('active');
         if (lockIndicator) lockIndicator.classList.remove('show');
         if (uiDefault) uiDefault.style.opacity = '1';
-        btnMic.style.transform = 'scale(1)';
+        const activeMic = document.getElementById('tool-audio');
+        if (activeMic) activeMic.style.transform = 'scale(1)';
     };
 
     const kirimDataSuara = async (dataBlob) => {
@@ -754,6 +802,7 @@ async function hapusSesiObrolanMutlak() {
     try {
         goOnline(dbChat);
         hapusItemInboxLokal(uid, idSesi);
+        delete sesiOrderDiterimaMap[idSesi];
         if (typeof window.bersihkanRutePesanan === 'function') window.bersihkanRutePesanan();
 
         await Promise.allSettled([
@@ -829,8 +878,26 @@ function mulaiDengarPesan() {
     }
 
     waktuBukaRuang = Date.now();
-    const referensi = query(ref(dbChat, `sesi_komunikasi/${idRuangObrolanAktif}/pesan`), limitToLast(50));
+    const idSesiSaatIni = idRuangObrolanAktif;
+    const referensi = query(ref(dbChat, `sesi_komunikasi/${idSesiSaatIni}/pesan`), limitToLast(50));
     const wadahChat = document.getElementById('chat-body');
+
+    // Sinkronkan status ACCEPTED dari metadata_order jika ruang dibuka ulang dari Inbox
+    if (idSesiSaatIni && !sesiOrderDiterimaMap[idSesiSaatIni]?.accepted) {
+        get(ref(dbChat, `sesi_komunikasi/${idSesiSaatIni}/metadata_order`)).then((snap) => {
+            if (snap && snap.exists()) {
+                const meta = snap.val();
+                if (meta.status === 'ACCEPTED') {
+                    tandaiOrderSudahDiambil(idSesiSaatIni, meta.wa_klien || '');
+                    const area = wadahChat ? wadahChat.querySelector('.katalog-action-area') : null;
+                    if (area) {
+                        const wa = area.getAttribute('data-waklien') || meta.wa_klien || '';
+                        area.innerHTML = renderStatusOrderDiambilHTML(wa);
+                    }
+                }
+            }
+        }).catch(() => {});
+    }
 
     pemantauPesan = onChildAdded(referensi, (snapshot) => {
         const pesan = snapshot.val();
@@ -877,13 +944,15 @@ function mulaiDengarPesan() {
                 const formatRp = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(k.harga) || 0);
                 const warnaLayanan = k.layanan === 'RIDE' ? '#3b82f6' : (k.layanan === 'EXPRESS' ? '#f59e0b' : '#10b981');
 
-                // Gambar rute jalan raya OSRM pada peta driver jika koordinat tersedia di struk katalog_order
+                // SYNC-03 FIX: Teruskan waypoints & toko_jastip ke gambarRutePesananOSRM agar titik singgah tidak terhapus
                 if ((k.pickup_coord || k.dropoff_coord) && typeof window.gambarRutePesananOSRM === 'function') {
                     window.gambarRutePesananOSRM({
                         pickup_coord: k.pickup_coord,
                         dropoff_coord: k.dropoff_coord,
                         pickup_alamat: k.jemput,
-                        dropoff_alamat: k.tujuan
+                        dropoff_alamat: k.tujuan,
+                        waypoints: k.waypoints || '',
+                        toko_jastip: k.toko_jastip || null
                     });
                 }
 
@@ -930,12 +999,19 @@ function mulaiDengarPesan() {
                     </div>`;
                 }
 
-                const actionButtons = `
-                    <div class="katalog-action-area" data-wadriver="${escapeHTML(k.wa_driver || '')}" style="display:flex; gap:8px; margin-top:8px;">
+                // SYNC-05 FIX: Jika pesanan sudah diambil melalui Modal Sergap, langsung tampilkan ORDER DIAMBIL + Tombol WA Penumpang
+                const waDriverLokal = document.getElementById('lock-wa')?.value || k.wa_driver || '';
+                const waKlienDariKatalog = k.wa_klien || sesiOrderDiterimaMap[idRuangObrolanAktif]?.wa_klien || '';
+                const sudahDiambil = Boolean(sesiOrderDiterimaMap[idRuangObrolanAktif]?.accepted);
+
+                const actionButtons = sudahDiambil
+                    ? `<div class="katalog-action-area" data-wadriver="${escapeHTML(waDriverLokal)}" data-waklien="${escapeHTML(waKlienDariKatalog)}" style="display:flex; gap:8px; margin-top:8px;">
+                        ${renderStatusOrderDiambilHTML(waKlienDariKatalog)}
+                       </div>`
+                    : `<div class="katalog-action-area" data-wadriver="${escapeHTML(waDriverLokal)}" data-waklien="${escapeHTML(waKlienDariKatalog)}" style="display:flex; gap:8px; margin-top:8px;">
                         <button class="btn-tolak-order" style="flex:1; background:rgba(239, 68, 68, 0.1); border:1px solid rgba(239, 68, 68, 0.3); color:#ef4444; padding:10px; border-radius:8px; font-weight:bold; font-size:0.75rem; cursor:pointer; transition:all 0.2s;"><i class="fa-solid fa-xmark"></i> TOLAK</button>
                         <button class="btn-terima-order" style="flex:1; background:#10b981; color:#0b101a; border:none; padding:10px; border-radius:8px; font-weight:bold; font-size:0.75rem; cursor:pointer; box-shadow:0 4px 10px rgba(16,185,129,0.3); transition:all 0.2s;"><i class="fa-solid fa-check"></i> TERIMA</button>
-                    </div>
-                `;
+                       </div>`;
 
                 htmlKonten = `
                     <div style="background:#0f1624; border:1px solid ${warnaLayanan}; border-radius:12px; padding:12px; width:min(255px, 76vw); display:flex; flex-direction:column; gap:6px; box-shadow:0 8px 20px rgba(0,0,0,0.4);">
