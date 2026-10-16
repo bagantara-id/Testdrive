@@ -11,6 +11,7 @@ import { hidupkanRadar, matikanRadar } from '../../chat/radar-tiket.js';
 
 export const INTERVAL_SINKRONISASI_AKTIF = 5000;
 const OLED_IDLE_TIMEOUT_MS = 60000; // 60 Detik Inaktivitas pada Mode Mangkal (Standby)
+const DEFAULT_ZONE_CENTER = { lat: -7.768049, lng: 112.196514 }; // Kediri / Pare (Sinkron dengan zona aktif aplikasi publik)
 
 window.__BGT_TELEMETRY_CACHE = window.__BGT_TELEMETRY_CACHE || { connected: false, accuracy: 0, jarak: 0, txTime: Date.now() };
 
@@ -178,7 +179,7 @@ window.bangunkanLayarOLED = bangunkanLayarOLED;
 });
 
 // ==========================================================================
-// INOVASI 3: GARIS RUTE JALAN RAYA OSRM GRATIS DI PETA DRIVER
+// INOVASI 3: GARIS RUTE JALAN RAYA OSRM GRATIS DI PETA DRIVER (SINKRON MULTI-STOP & WAYPOINTS)
 // ==========================================================================
 function parseKoordinatTiket(coordInput) {
     if (!coordInput) return null;
@@ -225,7 +226,7 @@ export async function gambarRutePesananOSRM(tiket) {
     bersihkanRutePesanan();
 
     const pickup = parseKoordinatTiket(tiket.pickup_coord);
-    const dropoff = parseKoordinatTiket(tiket.dropoff_coord);
+    let dropoff = parseKoordinatTiket(tiket.dropoff_coord);
     if (!pickup) return;
 
     let driverPos = null;
@@ -238,20 +239,33 @@ export async function gambarRutePesananOSRM(tiket) {
         driverPos = { lat: lastCoord.lat, lng: lastCoord.lng };
     }
 
-    const waypoints = [];
-    if (driverPos) waypoints.push(driverPos);
-    waypoints.push(pickup);
-
-    if (Array.isArray(tiket.multi_dropoffs)) {
-        tiket.multi_dropoffs.forEach(pt => {
-            const parsedPt = parseKoordinatTiket(pt);
-            if (parsedPt) waypoints.push(parsedPt);
+    // Pisahkan titik singgah antara (intermediate stops) dan titik tujuan akhir (final dropoff)
+    // agar tidak terjadi duplikasi marker atau duplikasi segmen OSRM!
+    const intermediateStops = [];
+    if (Array.isArray(tiket.multi_dropoffs) && tiket.multi_dropoffs.length > 1) {
+        const validMulti = tiket.multi_dropoffs.filter(pt => parseKoordinatTiket(pt) !== null);
+        if (validMulti.length > 1) {
+            validMulti.slice(0, -1).forEach(pt => {
+                const parsedPt = parseKoordinatTiket(pt);
+                if (parsedPt) intermediateStops.push({ ...parsedPt, name: pt.name || 'Titik Singgah' });
+            });
+            const lastMulti = parseKoordinatTiket(validMulti[validMulti.length - 1]);
+            if (lastMulti) dropoff = lastMulti;
+        }
+    } else if (typeof tiket.waypoints === 'string' && tiket.waypoints.trim() !== '') {
+        tiket.waypoints.split('|').forEach((wpStr, idx) => {
+            const parsedWp = parseKoordinatTiket(wpStr);
+            if (parsedWp) intermediateStops.push({ ...parsedWp, name: `Titik Singgah ${idx + 1}` });
         });
     }
 
+    const waypoints = [];
+    if (driverPos) waypoints.push(driverPos);
+    waypoints.push(pickup);
+    intermediateStops.forEach(st => waypoints.push({ lat: st.lat, lng: st.lng }));
     if (dropoff) waypoints.push(dropoff);
 
-    // Pasang Marker Jemput, Multi-Stop, & Tujuan
+    // Pasang Marker Jemput, Multi-Stop (Titik Singgah), & Tujuan Akhir
     const pickupIcon = L.divIcon({
         className: 'bgt-route-pin-pickup',
         html: `<div style="background:#10b981; color:#030712; width:30px; height:30px; border-radius:50%; border:2px solid #ffffff; display:flex; align-items:center; justify-content:center; font-weight:900; box-shadow:0 4px 12px rgba(16,185,129,0.7);"><i class="fa-solid fa-person-hail"></i></div>`,
@@ -262,23 +276,18 @@ export async function gambarRutePesananOSRM(tiket) {
         .bindPopup(`<b>Titik Jemput:</b><br>${String(tiket.pickup_alamat || 'Lokasi Penumpang')}`)
         .addTo(mapSystem);
 
-    if (Array.isArray(tiket.multi_dropoffs)) {
-        tiket.multi_dropoffs.forEach((pt, idx) => {
-            const parsedPt = parseKoordinatTiket(pt);
-            if (parsedPt) {
-                const stopIcon = L.divIcon({
-                    className: 'bgt-route-pin-stop',
-                    html: `<div style="background:#f59e0b; color:#030712; width:26px; height:26px; border-radius:50%; border:2px solid #ffffff; display:flex; align-items:center; justify-content:center; font-size:0.7rem; font-weight:900; box-shadow:0 4px 10px rgba(245,158,11,0.6);">${idx + 1}</div>`,
-                    iconSize: [26, 26],
-                    iconAnchor: [13, 13]
-                });
-                const m = L.marker([parsedPt.lat, parsedPt.lng], { icon: stopIcon })
-                    .bindPopup(`<b>Pemberhentian ${idx + 1}:</b><br>${String(pt.name || 'Titik Singgah')}`)
-                    .addTo(mapSystem);
-                orderMultiMarkers.push(m);
-            }
+    intermediateStops.forEach((st, idx) => {
+        const stopIcon = L.divIcon({
+            className: 'bgt-route-pin-stop',
+            html: `<div style="background:#f59e0b; color:#030712; width:26px; height:26px; border-radius:50%; border:2px solid #ffffff; display:flex; align-items:center; justify-content:center; font-size:0.7rem; font-weight:900; box-shadow:0 4px 10px rgba(245,158,11,0.6);">${idx + 1}</div>`,
+            iconSize: [26, 26],
+            iconAnchor: [13, 13]
         });
-    }
+        const m = L.marker([st.lat, st.lng], { icon: stopIcon })
+            .bindPopup(`<b>Pemberhentian ${idx + 1}:</b><br>${String(st.name || 'Titik Singgah')}`)
+            .addTo(mapSystem);
+        orderMultiMarkers.push(m);
+    });
 
     if (dropoff) {
         const dropoffIcon = L.divIcon({
@@ -288,7 +297,7 @@ export async function gambarRutePesananOSRM(tiket) {
             iconAnchor: [15, 15]
         });
         orderDropoffMarker = L.marker([dropoff.lat, dropoff.lng], { icon: dropoffIcon })
-            .bindPopup(`<b>Titik Tujuan:</b><br>${String(tiket.dropoff_alamat || 'Tujuan Penumpang')}`)
+            .bindPopup(`<b>Titik Tujuan Akhir:</b><br>${String(tiket.dropoff_alamat || 'Tujuan Penumpang')}`)
             .addTo(mapSystem);
     }
 
@@ -347,16 +356,13 @@ window.bersihkanRutePesanan = bersihkanRutePesanan;
 // ==========================================================================
 function dapatkanUrlTileProvider(index, isLight) {
     if (index === 0) {
-        // Indeks 0: Murni menggunakan Token MapTiler Pribadi Driver dari localStorage (Bukan Token Aplikasi Publik)
         const key = (localStorage.getItem('bgt_maptiler_key') || '').trim();
         return isLight
             ? `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=${key}`
             : `https://api.maptiler.com/maps/streets-v2-dark/{z}/{x}/{y}.png?key=${key}`;
     } else if (index === 1) {
-        // Indeks 1 (Default Awal Tanpa Token): OpenStreetMap (OSM) Standar Gratis
         return 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
     } else {
-        // Indeks 2 (Fallback Sekunder Tanpa Token): ArcGIS World Street Map
         return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
     }
 }
@@ -374,8 +380,6 @@ function sinkronisasiFilterFallbackPeta() {
 function pasangTileLayerHydra(providerIdx = 0) {
     if (!mapSystem) return;
 
-    // Smart Circuit-Breaker: Saat awal aplikasi dibuka (belum ada token pribadi di localStorage),
-    // langsung gunakan Indeks 1 (OSM Gratis) tanpa menyentuh server MapTiler sama sekali.
     if (providerIdx === 0) {
         const savedKey = (localStorage.getItem('bgt_maptiler_key') || '').trim();
         if (!savedKey) {
@@ -661,15 +665,20 @@ function dapatkanIkonMarker(mode) {
 }
 
 // ==========================================================================
-// 2. ENGINE UTAMA PETA & RADAR SILUMAN
+// 2. ENGINE UTAMA PETA & RADAR SILUMAN (0 DUPLICATE READ RTDB SAAT BOOT)
 // ==========================================================================
 async function periksaResureksiStatus() {
     if (!auth.currentUser) return false;
     try {
-        const token = await auth.currentUser.getIdToken();
-        const dbUrl = `https://bagantara-core-default-rtdb.asia-southeast1.firebasedatabase.app/drivers/${auth.currentUser.uid}/status.json?auth=${token}`;
-        const res = await fetch(dbUrl);
-        const data = await res.json();
+        // Gunakan snapshot RTDB yang sudah ditarik oleh dashboard.js saat boot untuk menghindari GET ganda
+        let data = window.__BGT_RTDB_STATUS_BOOT;
+        if (data === undefined) {
+            const token = await auth.currentUser.getIdToken();
+            const dbUrl = `https://bagantara-core-default-rtdb.asia-southeast1.firebasedatabase.app/drivers/${auth.currentUser.uid}/status.json?auth=${token}`;
+            const res = await fetch(dbUrl);
+            data = await res.json();
+        }
+        window.__BGT_RTDB_STATUS_BOOT = undefined;
 
         if (data) {
             const now = getTrueTime();
@@ -711,26 +720,50 @@ async function periksaResureksiStatus() {
 export async function inisialisasiPeta() {
     if (mapSystem) { mapSystem.invalidateSize(); return; }
     isLightModeGlobal = document.body.classList.contains('theme-light');
-    mapSystem = L.map('map', { zoomControl: false, attributionControl: false }).setView([-6.200000, 106.816666], 15);
+
+    // Gunakan koordinat terakhir di memori lokal atau pusat zona aktif Jawa Timur (bukan Jakarta) agar hemat unduhan tile
+    let initViewLat = DEFAULT_ZONE_CENTER.lat;
+    let initViewLng = DEFAULT_ZONE_CENTER.lng;
+    try {
+        const lastSaved = JSON.parse(localStorage.getItem('bgt_last_coord') || 'null');
+        if (lastSaved && !isNaN(parseFloat(lastSaved.lat)) && !isNaN(parseFloat(lastSaved.lng))) {
+            initViewLat = parseFloat(lastSaved.lat);
+            initViewLng = parseFloat(lastSaved.lng);
+        }
+    } catch (e) {}
+
+    mapSystem = L.map('map', { zoomControl: false, attributionControl: false }).setView([initViewLat, initViewLng], 15);
     pasangTileLayerHydra(0);
 
     const statusResureksi = await periksaResureksiStatus();
 
     if (statusResureksi === true) {
         nyalakanRadarGeofencingSiluman();
-    } else {
-        const initialLocWatch = navigator.geolocation.watchPosition(
+    } else if (statusResureksi === 'lanjut_aktif') {
+        navigator.geolocation.getCurrentPosition(
             (pos) => {
                 koordinatLokal = pos;
                 const lat = pos.coords.latitude, lng = pos.coords.longitude;
                 localStorage.setItem('bgt_last_coord', JSON.stringify({ lat, lng }));
                 tetapkanPosisiPeta(lat, lng, true);
-                if (statusResureksi === 'lanjut_aktif') mulaiModeAktif();
-                navigator.geolocation.clearWatch(initialLocWatch);
-                nyalakanRadarGeofencingSiluman();
+                mulaiModeAktif();
             },
             () => matikanSinkronisasi("Akses lokasi ditolak atau gagal."),
-            { enableHighAccuracy: true, maximumAge: 0 }
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+    } else {
+        // Saat masih Offline, cukup kunci lokasi awal 1x tanpa menyalakan watchPosition terus-menerus
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                koordinatLokal = pos;
+                const lat = pos.coords.latitude, lng = pos.coords.longitude;
+                localStorage.setItem('bgt_last_coord', JSON.stringify({ lat, lng }));
+                tetapkanPosisiPeta(lat, lng, true);
+            },
+            () => {
+                tetapkanPosisiPeta(initViewLat, initViewLng, false);
+            },
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
         );
     }
 }
@@ -1252,7 +1285,12 @@ export async function matikanSinkronisasi(pesan = "") {
         try {
             const token = await auth.currentUser.getIdToken();
             const dbUrl = `https://bagantara-core-default-rtdb.asia-southeast1.firebasedatabase.app/drivers/${auth.currentUser.uid}/status.json?auth=${token}`;
-            await fetch(dbUrl, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isOnline: false, mode: 'offline', expiresAt: 0 }) });
+            // Set geohash: 'OFFLINE' agar driver yang sedang offline tidak ikut terunduh saat aplikasi publik memindai geohash aktif
+            await fetch(dbUrl, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ isOnline: false, mode: 'offline', expiresAt: 0, geohash: 'OFFLINE' })
+            });
         } catch (err) {}
     }
 

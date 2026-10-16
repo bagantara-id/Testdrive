@@ -250,6 +250,9 @@ async function muatDataPengemudi(data) {
             const res = await fetch(dbUrl);
             const rtdbData = await res.json();
 
+            // Simpan snapshot boot RTDB agar periksaResureksiStatus di gps-engine.js tidak melakukan GET ulang (Hemat 50% Read RTDB saat boot)
+            window.__BGT_RTDB_STATUS_BOOT = rtdbData || null;
+
             if (rtdbData) {
                 const sinkronSettings = {
                     info: rtdbData.agenda || "",
