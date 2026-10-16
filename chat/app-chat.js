@@ -1,7 +1,7 @@
 // ==========================================================================
 // FILE: chat/app-chat.js
 // FUNGSI: Mesin Obrolan Real-Time, REST Inbox (0 Koneksi Idle), WebP Edge Compressor,
-//         Background Chat Alert (Suara + Banner Notifikasi Sistem), & Anti-XSS
+//         Background Chat Alert (Suara 2x Pesan Pelanggan + Banner Notifikasi Sistem), & Anti-XSS
 // ==========================================================================
 
 import { dbChat, dbRadar } from './config-chat.js';
@@ -820,8 +820,6 @@ export function akhiriSesiKomunikasi() {
     const sesiSebelumnya = idRuangObrolanAktif;
     idRuangObrolanAktif = null;
 
-    // Jika sesi ini BELUM diambil (atau tidak ada order aktif), matikan pemantau & putus koneksi dbChat untuk hemat 100 koneksi.
-    // NAMUN jika sesi ini adalah order yang SUDAH DIAMBIL (driver sedang meluncur/membuka Google Maps), biarkan pemantauPesan tetap hidup di latar belakang agar chat baru dari penumpang tetap berdering & memunculkan notifikasi!
     const apakahSesiSudahDiambil = Boolean(sesiSebelumnya && sesiOrderDiterimaMap[sesiSebelumnya]?.accepted);
 
     if (!apakahSesiSudahDiambil) {
@@ -829,7 +827,6 @@ export function akhiriSesiKomunikasi() {
         if (typeof pemantauPesanUbah === 'function') { pemantauPesanUbah(); pemantauPesanUbah = null; }
         goOffline(dbChat);
     } else {
-        // Tetap simpan idRuangObrolanAktif di pemantau latar belakang
         idRuangObrolanAktif = sesiSebelumnya;
     }
 
@@ -973,7 +970,6 @@ function mulaiDengarPesan() {
         const panelChat = document.getElementById('panel-komunikasi-utama');
         const isPanelChatTerbuka = panelChat && !panelChat.classList.contains('hidden-state');
 
-        // Tangkap sinyal "🔔 DERINGKAN DRIVER" (sistem_ping) di ruang obrolan
         if (pesan.tipe === 'sistem_ping') {
             if (isPesanBaru) {
                 mainkanNotifikasiPesanMasuk();
@@ -1005,7 +1001,6 @@ function mulaiDengarPesan() {
 
                 let previewTeks = pesan.tipe === 'teks' ? pesan.konten : (pesan.tipe === 'lokasi' ? '📍 Mengirim Titik Lokasi' : (pesan.tipe === 'audio' ? '🎤 Mengirim Pesan Suara' : (pesan.tipe === 'katalog_order' ? '📜 Mengirim Katalog Order' : '🖼️ Mengirim Gambar')));
 
-                // INOVASI SUARA KOKPIT & NOTIFIKASI LATAR BELAKANG SAAT CHAT MASUK KETIKA BUKA APLIKASI LAIN!
                 if (pesan.tipe !== 'katalog_order') {
                     if (pesan.tipe === 'teks') {
                         bacakanPesanChatKokpit(`Pesan baru dari penumpang. ${String(pesan.konten).substring(0, 120)}`);
@@ -1060,7 +1055,6 @@ function mulaiDengarPesan() {
                     memoriRuteSesiMap[idSesiSaatIni] = objekRuteKatalog;
                 }
 
-                // Jangan menggambar ulang secara paksa jika driver sudah menekan tombol "Bersihkan Rute" untuk sesi ini
                 const sudahDihapusDriver = Boolean(idSesiSaatIni && window.__BGT_CLEARED_ROUTES?.[idSesiSaatIni]);
                 if (!sudahDihapusDriver && (k.pickup_coord || k.dropoff_coord) && typeof window.gambarRutePesananOSRM === 'function') {
                     window.gambarRutePesananOSRM(objekRuteKatalog, idSesiSaatIni);
@@ -1225,7 +1219,7 @@ GPS ASLI: ${pesan.forensik.exif.lokasi_asli}`;
         }
 
         const extraCardClass = (pesan.tipe === 'katalog_order' || pesan.tipe === 'lokasi' || pesan.tipe === 'gambar') ? ' msg-katalog-card' : '';
-        if (wadahChat && ! document.getElementById(idUnik)) {
+        if (wadahChat && !document.getElementById(idUnik)) {
             wadahChat.insertAdjacentHTML('beforeend', `<div id="${escapeHTML(idUnik)}" class="msg-bubble ${posisiKelas}${extraCardClass}"><div class="msg-content">${htmlKonten}</div><span class="msg-time" style="display: flex; align-items: center; justify-content: flex-end; margin-top: 2px;">${new Date(pesan.waktu).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}${statusIkon}</span></div>`);
 
             clearTimeout(wadahChat.scrollTimer);
@@ -1278,22 +1272,31 @@ async function kirimPayloadPesan(kontenPesan, tipePesan = "teks", metadataForens
 }
 
 // ==========================================================================
-// WEB AUDIO API SYNTHESIZER (PENGGANTI RINGTONE URL)
+// WEB AUDIO API SYNTHESIZER: SOUND EFFECT 4. PESAN PELANGGAN (BERBUNYI 2 KALI)
 // ==========================================================================
 let audioCtxChat = null;
-let chatAlarmInterval = null;
+let chatAlarmTimeout = null;
 let isChatAlarmPlaying = false;
+let activeChatOscillators = [];
 
 export function hentikanNotifChat() {
-    if (chatAlarmInterval) { clearInterval(chatAlarmInterval); chatAlarmInterval = null; }
+    if (chatAlarmTimeout) { clearTimeout(chatAlarmTimeout); chatAlarmTimeout = null; }
     isChatAlarmPlaying = false;
+    if (activeChatOscillators.length > 0) {
+        activeChatOscillators.forEach(item => {
+            try { item.osc.stop(); } catch (e) {}
+            try { item.osc.disconnect(); } catch (e) {}
+            try { item.gain.disconnect(); } catch (e) {}
+        });
+        activeChatOscillators = [];
+    }
 }
 
 document.addEventListener('click', hentikanNotifChat, { passive: true });
 document.addEventListener('touchstart', hentikanNotifChat, { passive: true });
 
 export function mainkanNotifikasiPesanMasuk() {
-    if (isChatAlarmPlaying) return;
+    hentikanNotifChat();
 
     try {
         if (!audioCtxChat) { audioCtxChat = new (window.AudioContext || window.webkitAudioContext)(); }
@@ -1302,31 +1305,35 @@ export function mainkanNotifikasiPesanMasuk() {
 
     isChatAlarmPlaying = true;
 
-    const playPing = () => {
-        if (!isChatAlarmPlaying || !audioCtxChat) return;
-        try {
-            if (audioCtxChat.state === 'suspended') audioCtxChat.resume().catch(() => {});
-            const osc = audioCtxChat.createOscillator();
-            const gain = audioCtxChat.createGain();
+    try {
+        const synth = function(audioCtx) {
+            const t = audioCtx.currentTime;
+            for (let i = 0; i < 2; i++) { // Hanya berbunyi 2 kali saja
+                const start = t + (i * 2);
+                [1500, 2000].forEach((freq, idx) => {
+                    const o = audioCtx.createOscillator();
+                    const g = audioCtx.createGain();
+                    o.type = 'sine';
+                    o.frequency.value = freq;
+                    const d = start + (idx * 0.15);
+                    g.gain.setValueAtTime(0, d);
+                    g.gain.linearRampToValueAtTime(0.7, d + 0.05);
+                    g.gain.exponentialRampToValueAtTime(0.001, d + 1.5);
+                    o.connect(g);
+                    g.connect(audioCtx.destination);
+                    o.start(d);
+                    o.stop(d + 1.5);
+                    activeChatOscillators.push({ osc: o, gain: g });
+                });
+            }
+        };
+        synth(audioCtxChat);
+    } catch (e) {}
 
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(1567.98, audioCtxChat.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(3135.96, audioCtxChat.currentTime + 0.12);
-
-            gain.gain.setValueAtTime(0.01, audioCtxChat.currentTime);
-            gain.gain.linearRampToValueAtTime(0.9, audioCtxChat.currentTime + 0.05);
-            gain.gain.exponentialRampToValueAtTime(0.001, audioCtxChat.currentTime + 0.55);
-
-            osc.connect(gain);
-            gain.connect(audioCtxChat.destination);
-
-            osc.start(audioCtxChat.currentTime);
-            osc.stop(audioCtxChat.currentTime + 0.55);
-        } catch (e) {}
-    };
-
-    playPing();
-    chatAlarmInterval = setInterval(playPing, 2500);
+    chatAlarmTimeout = setTimeout(() => {
+        isChatAlarmPlaying = false;
+        activeChatOscillators = [];
+    }, 3700);
 }
 
 function dapatkanKunciLokasiForensik() {
@@ -1472,9 +1479,6 @@ function tutupBottomSheetForensik() {
 document.addEventListener("visibilitychange", () => {
     const adaOrderAktif = Boolean(idRuangObrolanAktif || Object.values(sesiOrderDiterimaMap).some(v => v && v.accepted));
     if (document.visibilityState === 'hidden') {
-        // HANYA putus koneksi dbChat jika TIDAK ADA sesi obrolan / order aktif.
-        // Jika sedang ada order aktif (misal Driver sedang membuka Google Maps untuk menjemput penumpang),
-        // koneksi dbChat WAJIB TETAP HIDUP agar pesan chat baru dari penumpang langsung berbunyi & memunculkan banner notifikasi!
         if (!adaOrderAktif) {
             goOffline(dbChat);
         }

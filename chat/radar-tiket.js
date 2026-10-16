@@ -1,7 +1,7 @@
 // ==========================================================================
 // FILE: chat/radar-tiket.js
 // FUNGSI: Mesin Radar RTDB Ke-3 (futaqi-ali), Layar Sergap Pesanan Penuh (Inovasi 1),
-//         Web Audio Sirine & Getaran Taktis, Suara Asisten Kokpit id-ID (Inovasi 2),
+//         Web Audio Sirine & Getaran Taktis (10 Detik Triangle Triad), Suara Asisten Kokpit id-ID (Inovasi 2),
 //         Notifikasi Banner Sistem Latar Belakang, & Penangkap Tombol "Deringkan Driver"
 // ==========================================================================
 
@@ -92,12 +92,13 @@ export async function tampilkanNotifikasiSistemLokal(judul, isi, idTiket = '', t
 }
 
 // =======================================================================
-// 🔊 INOVASI 1A: ENGINE AUDIO SIRINE TAKTIS (WEB AUDIO API MURNI) & GETARAN
+// 🔊 INOVASI 1A: ENGINE AUDIO ORDER MASUK (SINYAL BERULANG 10 DETIK) & GETARAN
 // =======================================================================
 let audioCtxRadar = null;
-let sirineIntervalId = null;
+let sirineTimeoutId = null;
 let vibrateIntervalId = null;
 let isSirineBerbunyi = false;
+let activeRadarOscillators = [];
 
 const POLA_GETAR_SERGAP = [600, 200, 600, 200, 800, 200, 600];
 
@@ -120,11 +121,14 @@ export function bunyikanSonarTiket() {
         silentAudioLoop.play().catch(() => {});
     }
 
-    // 1. Getaran Berirama Taktis
+    // Bersihkan jadwal suara sebelumnya jika masih ada
+    hentikanSonar();
+    isSirineBerbunyi = true;
+
+    // 1. Getaran Berirama Taktis (Selama 10 Detik)
     try {
         if ('vibrate' in navigator) {
             navigator.vibrate(POLA_GETAR_SERGAP);
-            if (vibrateIntervalId) clearInterval(vibrateIntervalId);
             vibrateIntervalId = setInterval(() => {
                 if (isSirineBerbunyi && 'vibrate' in navigator) {
                     navigator.vibrate(POLA_GETAR_SERGAP);
@@ -133,52 +137,55 @@ export function bunyikanSonarTiket() {
         }
     } catch (e) {}
 
-    // 2. Sirine Web Audio API
-    if (isSirineBerbunyi) return;
-    isSirineBerbunyi = true;
-
-    const mainkanSiklusSirine = () => {
-        if (!isSirineBerbunyi || !audioCtxRadar) return;
-        try {
+    // 2. Sound Effect: 1. Order Masuk (Sinyal Berulang dengan Durasi: 10 Detik)
+    try {
+        if (audioCtxRadar) {
             if (audioCtxRadar.state === 'suspended') audioCtxRadar.resume().catch(() => {});
-            const now = audioCtxRadar.currentTime;
+            const synth = function(audioCtx) {
+                const t = audioCtx.currentTime;
+                for (let i = 0; i < 10; i++) { // 10 detik
+                    [880, 1108.73, 1318.51].forEach(freq => {
+                        const o = audioCtx.createOscillator();
+                        const g = audioCtx.createGain();
+                        o.type = 'triangle';
+                        o.frequency.value = freq;
+                        g.gain.setValueAtTime(0, t + i);
+                        g.gain.linearRampToValueAtTime(0.5, t + i + 0.1);
+                        g.gain.exponentialRampToValueAtTime(0.001, t + i + 0.9);
+                        o.connect(g);
+                        g.connect(audioCtx.destination);
+                        o.start(t + i);
+                        o.stop(t + i + 1);
+                        activeRadarOscillators.push({ osc: o, gain: g });
+                    });
+                }
+            };
+            synth(audioCtxRadar);
+        }
+    } catch (e) {}
 
-            const osc1 = audioCtxRadar.createOscillator();
-            const gain1 = audioCtxRadar.createGain();
-
-            osc1.type = 'sawtooth';
-            osc1.frequency.setValueAtTime(880, now);
-            osc1.frequency.linearRampToValueAtTime(1760, now + 0.35);
-            osc1.frequency.linearRampToValueAtTime(880, now + 0.70);
-            osc1.frequency.linearRampToValueAtTime(1760, now + 1.05);
-
-            gain1.gain.setValueAtTime(0.01, now);
-            gain1.gain.linearRampToValueAtTime(0.35, now + 0.05);
-            gain1.gain.setValueAtTime(0.35, now + 1.0);
-            gain1.gain.exponentialRampToValueAtTime(0.001, now + 1.25);
-
-            osc1.connect(gain1);
-            gain1.connect(audioCtxRadar.destination);
-
-            osc1.start(now);
-            osc1.stop(now + 1.25);
-        } catch (e) {}
-    };
-
-    mainkanSiklusSirine();
-    if (sirineIntervalId) clearInterval(sirineIntervalId);
-    sirineIntervalId = setInterval(mainkanSiklusSirine, 1500);
+    sirineTimeoutId = setTimeout(() => {
+        hentikanSonar();
+    }, 10000);
 }
 
 export function hentikanSonar() {
     isSirineBerbunyi = false;
-    if (sirineIntervalId) {
-        clearInterval(sirineIntervalId);
-        sirineIntervalId = null;
+    if (sirineTimeoutId) {
+        clearTimeout(sirineTimeoutId);
+        sirineTimeoutId = null;
     }
     if (vibrateIntervalId) {
         clearInterval(vibrateIntervalId);
         vibrateIntervalId = null;
+    }
+    if (activeRadarOscillators.length > 0) {
+        activeRadarOscillators.forEach(item => {
+            try { item.osc.stop(); } catch (e) {}
+            try { item.osc.disconnect(); } catch (e) {}
+            try { item.gain.disconnect(); } catch (e) {}
+        });
+        activeRadarOscillators = [];
     }
     try {
         if ('vibrate' in navigator) navigator.vibrate(0);
@@ -385,7 +392,7 @@ export function tampilkanModalSergapPesanan(idTiket, tiket) {
         window.gambarRutePesananOSRM(tiket, idTiket);
     }
 
-    // Aktifkan Sirine Web Audio + Getaran Berirama + Suara Asisten Kokpit (id-ID)
+    // Aktifkan Sirine Web Audio (10 Detik) + Getaran Berirama + Suara Asisten Kokpit (id-ID)
     bunyikanSonarTiket();
     bacakanPesananKokpit(tiket);
 
@@ -664,7 +671,6 @@ if ('serviceWorker' in navigator) {
                 bukaRuangKomunikasi(notifData.idTiket, notifData.namaKlien || 'Penumpang');
             }
         } else if (event.data.type === 'BGT_FCM_BACKGROUND_WAKEUP') {
-            // Bangunkan sirine & suara kokpit meskipun aplikasi sedang di latar belakang!
             if (typeof window.bangunkanLayarOLED === 'function') {
                 window.bangunkanLayarOLED();
             }
