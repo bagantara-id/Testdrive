@@ -1,6 +1,8 @@
 // ==========================================================================
 // FILE: service-worker.js
-// FUNGSI: Pengendali Jaringan, Dual-Cache Isolasi Peta, Bypass Real-Time 3 RTDB, & Notifikasi FCM
+// FUNGSI: Pengendali Jaringan (Network-First untuk Kode Agar Tidak Perlu Hapus Data),
+//         Dual-Cache Isolasi Peta (Cache-First Hemat Kuota Tile), Bypass Real-Time 3 RTDB,
+//         & Jembatan Pemicu Sirine Latar Belakang (FCM + Push Wake-Up Bridge)
 // ==========================================================================
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js');
@@ -33,26 +35,55 @@ firebase.initializeApp(firebaseMesin[MESIN_AKTIF]);
 
 const messaging = firebase.messaging();
 
-// Menangkap Push Notification saat aplikasi tertutup / di latar belakang
-messaging.onBackgroundMessage((payload) => {
-    console.log('[FCM SW] Menerima pesan latar belakang: ', payload);
+// Fungsi pembangun sinyal ke seluruh tab Driver yang sedang di latar belakang (sedang buka aplikasi lain)
+async function bangunkanTabDriverDiBackground(payloadData) {
+    try {
+        const windowClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        for (let i = 0; i < windowClients.length; i++) {
+            windowClients[i].postMessage({
+                type: 'BGT_FCM_BACKGROUND_WAKEUP',
+                data: payloadData || {}
+            });
+        }
+    } catch (e) {}
+}
 
-    const notificationTitle = payload.notification?.title || payload.data?.title || '🚨 ORDER MASUK!';
+// Menangkap Push Notification saat aplikasi tertutup / sedang membuka aplikasi lain
+messaging.onBackgroundMessage((payload) => {
+    const data = payload.data || {};
+    const isChatMsg = data.type === 'CHAT_MESSAGE' || data.type === 'SONAR_PING';
+    const notificationTitle = payload.notification?.title || data.title || (isChatMsg ? '💬 PESAN / PANGGILAN PENUMPANG!' : '🚨 ORDER BARU MASUK!');
+    const notificationBody = payload.notification?.body || data.body || 'Ketuk untuk membuka aplikasi Driver Bagantara.';
+
     const notificationOptions = {
-        body: payload.notification?.body || payload.data?.body || 'Segera buka aplikasi untuk melihat pesanan.',
+        body: notificationBody,
         icon: './assets/icon-192.png',
         badge: './assets/icon-192.png',
-        tag: payload.data?.idTiket || 'bgt-order-alert',
+        tag: data.idTiket ? `bgt-${data.type || 'order'}-${data.idTiket}` : 'bgt-order-alert',
         renotify: true,
         vibrate: [600, 200, 600, 200, 800, 200, 600],
         requireInteraction: true,
-        data: payload.data || {}
+        actions: [
+            { action: 'open_cockpit', title: '⚡ BUKA KOKPIT SEKARANG' }
+        ],
+        data: data
     };
 
-    self.registration.showNotification(notificationTitle, notificationOptions);
+    bangunkanTabDriverDiBackground(data);
+    return self.registration.showNotification(notificationTitle, notificationOptions);
 });
 
-// Aksi ketika notifikasi diklik oleh pengemudi
+// Intersep level-rendah event 'push' agar meskipun FCM membawa objek notification, tab background tetap dibangunkan untuk memutar Sirine Web Audio!
+self.addEventListener('push', (event) => {
+    if (!event.data) return;
+    try {
+        const raw = event.data.json();
+        const data = raw.data || {};
+        event.waitUntil(bangunkanTabDriverDiBackground(data));
+    } catch (e) {}
+});
+
+// Aksi ketika notifikasi diklik oleh pengemudi saat sedang membuka aplikasi lain
 self.addEventListener('notificationclick', (event) => {
     event.notification.close();
     const notifData = event.notification.data || {};
@@ -73,7 +104,7 @@ self.addEventListener('notificationclick', (event) => {
     );
 });
 
-const CACHE_STATIC = 'bagantara-driver-v8-static';
+const CACHE_STATIC = 'bagantara-driver-v8-static-r3';
 const CACHE_TILES = 'bagantara-map-tiles-v1';
 
 const ASSETS_TO_CACHE = [
@@ -117,7 +148,6 @@ const ASSETS_TO_CACHE = [
 self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_STATIC).then((cache) => {
-            console.log('[SW] Menyimpan aset statis ke dalam CACHE_STATIC...');
             return cache.addAll(ASSETS_TO_CACHE);
         })
     );
@@ -130,7 +160,6 @@ self.addEventListener('activate', (event) => {
             return Promise.all(
                 cacheNames.map((cache) => {
                     if (cache !== CACHE_STATIC && cache !== CACHE_TILES) {
-                        console.log('[SW] Memusnahkan cache usang:', cache);
                         return caches.delete(cache);
                     }
                 })
@@ -157,6 +186,7 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
+    // 1. Tile Peta tetap menggunakan Cache-First untuk menghemat kuota MapTiler/OSM secara maksimal
     if (reqUrl.includes('api.maptiler.com') ||
         reqUrl.includes('arcgisonline.com') ||
         reqUrl.includes('tile.openstreetmap')) {
@@ -194,9 +224,10 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
+    // 2. Strategi NETWORK-FIRST untuk file kode (.html, .js, .css, .json) agar setiap update langsung aktif real-time tanpa perlu Hapus Data!
     event.respondWith(
-        caches.match(event.request).then((cachedResponse) => {
-            const fetchPromise = fetch(event.request).then((networkResponse) => {
+        fetch(event.request)
+            .then((networkResponse) => {
                 if (networkResponse && networkResponse.status === 200) {
                     const responseClone = networkResponse.clone();
                     caches.open(CACHE_STATIC).then((cache) => {
@@ -204,9 +235,9 @@ self.addEventListener('fetch', (event) => {
                     });
                 }
                 return networkResponse;
-            }).catch(() => {});
-
-            return cachedResponse || fetchPromise;
-        })
+            })
+            .catch(() => {
+                return caches.match(event.request);
+            })
     );
 });
