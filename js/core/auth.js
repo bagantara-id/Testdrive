@@ -173,7 +173,12 @@ document.querySelectorAll('.btn-logout').forEach(btn => {
             try {
                 const token = await currentUser.getIdToken();
                 const dbUrl = `https://bagantara-core-default-rtdb.asia-southeast1.firebasedatabase.app/drivers/${currentUser.uid}/status.json?auth=${token}`;
-                await fetch(dbUrl, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ isOnline: false, session_id: null }) });
+                // Set geohash ke "OFFLINE" agar tidak terunduh oleh query geohash aplikasi publik (Hemat Kuota RTDB)
+                await fetch(dbUrl, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ isOnline: false, mode: 'offline', expiresAt: 0, geohash: 'OFFLINE', session_id: null })
+                });
             } catch (e) {}
         }
         signOut(auth);
@@ -272,15 +277,11 @@ document.addEventListener('visibilitychange', () => {
 });
 
 async function inisialisasiSesiDriver(uid, profileData) {
-    currentSessionId = "SES_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
+    currentSessionId = localStorage.getItem('bgt_session') || ("SES_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7));
     localStorage.setItem('bgt_session', currentSessionId);
 
-    try {
-        const token = await auth.currentUser.getIdToken();
-        const dbUrl = `https://bagantara-core-default-rtdb.asia-southeast1.firebasedatabase.app/drivers/${uid}/status.json?auth=${token}`;
-        await fetch(dbUrl, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_id: currentSessionId }) });
-    } catch (e) { console.warn("Gagal set sesi awal:", e); }
-
+    // HEMAT KUOTA WRITE RTDB: Jangan melakukan PATCH session_id saat baru buka aplikasi (masih Offline).
+    // session_id akan otomatis dikirim bersama kirimPayloadPenuhRTDB saat Driver menekan tombol Online (Aktif/Mangkal).
     switchState('dashboard');
     window.__BGT_DRIVER_DATA_BUFFER = profileData;
     requestAnimationFrame(() => {
