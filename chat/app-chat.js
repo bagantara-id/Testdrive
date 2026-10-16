@@ -1,7 +1,7 @@
 // ==========================================================================
 // FILE: chat/app-chat.js
-// FUNGSI: Mesin Obrolan Real-Time, REST Inbox (0 Koneksi Idle), WebP Edge Compressor, & Anti-XSS
-// ARSITEKTUR: Enterprise Grade - On-Demand Socket (goOnline hanya di Ruang Chat)
+// FUNGSI: Mesin Obrolan Real-Time, REST Inbox (0 Koneksi Idle), WebP Edge Compressor,
+//         Background Chat Alert (Suara + Banner Notifikasi Sistem), & Anti-XSS
 // ==========================================================================
 
 import { dbChat, dbRadar } from './config-chat.js';
@@ -27,11 +27,14 @@ let isDOMEventBound = false;
 let pemantauPesanUbah = null;
 let intervalRekamanGlobal = null;
 
-// Memori lokal daftar inbox (0 Koneksi WebSocket Permanen)
+// Memori lokal daftar inbox (0 Koneksi WebSocket Permanen saat tidak ada sesi aktif)
 let memoriInboxLokal = {};
 
-// Memori status sesi yang sudah diambil oleh Driver (mencegah tombol Terima/Tolak ganda saat katalog_order menyusul)
+// Memori status sesi yang sudah diambil oleh Driver
 const sesiOrderDiterimaMap = {};
+
+// Simpan data rute terakhir per sesi agar tombol "Tampilkan Rute di Peta" dapat menggambar ulang kapan saja
+const memoriRuteSesiMap = {};
 
 export function tandaiOrderSudahDiambil(idTiket, waKlien = '') {
     if (!idTiket) return;
@@ -42,7 +45,7 @@ export function tandaiOrderSudahDiambil(idTiket, waKlien = '') {
 }
 
 // ==========================================================================
-// 0. SANITASI ANTI-XSS (SPESIFIKASI 3.4)
+// 0. SANITASI ANTI-XSS & HELPER NOTIFIKASI LATAR BELAKANG
 // ==========================================================================
 export function escapeHTML(str) {
     if (str === null || str === undefined) return '';
@@ -52,6 +55,46 @@ export function escapeHTML(str) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+async function tampilkanBannerNotifChatLatarBelakang(judul, isi, idTiket) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const opsi = {
+        body: isi,
+        icon: './assets/icon-192.png',
+        badge: './assets/icon-192.png',
+        tag: `bgt-chat-${idTiket || 'msg'}`,
+        renotify: true,
+        requireInteraction: true,
+        vibrate: [500, 150, 500, 150, 700],
+        data: { idTiket: idTiket, type: 'CHAT_MESSAGE' }
+    };
+    try {
+        if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.ready;
+            if (reg && typeof reg.showNotification === 'function') {
+                await reg.showNotification(judul, opsi);
+                return;
+            }
+        }
+    } catch (e) {}
+    try { new Notification(judul, opsi); } catch (e) {}
+}
+
+function bacakanPesanChatKokpit(teksSuara) {
+    if (!('speechSynthesis' in window) || !teksSuara) return;
+    try {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(teksSuara);
+        utterance.lang = 'id-ID';
+        utterance.rate = 1.04;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+        const voices = window.speechSynthesis.getVoices();
+        const idVoice = voices.find(v => v.lang && v.lang.toLowerCase().includes('id'));
+        if (idVoice) utterance.voice = idVoice;
+        window.speechSynthesis.speak(utterance);
+    } catch (e) {}
 }
 
 // ==========================================================================
@@ -172,11 +215,9 @@ export async function inisialisasiInboxChat() {
     if (!auth.currentUser) return;
     const uid = auth.currentUser.uid;
 
-    // 1. Tampilkan segera dari memori lokal / localStorage
     memoriInboxLokal = bacaCacheInboxLokal(uid);
     renderDaftarInboxDariMemori();
 
-    // 2. Muat daftar inbox_mitra terbaru via REST fetch ringan (0 Koneksi WebSocket)
     try {
         const ctrl = new AbortController();
         const tId = setTimeout(() => ctrl.abort(), 4000);
@@ -191,7 +232,6 @@ export async function inisialisasiInboxChat() {
             renderDaftarInboxDariMemori();
         }
     } catch (err) {
-        // Gunakan memori lokal jika jaringan sedang lambat
         renderDaftarInboxDariMemori();
     }
 }
@@ -202,20 +242,20 @@ export async function inisialisasiInboxChat() {
 export function bukaRuangKomunikasi(idTiketMasuk, namaKlien = "Klien", tiketAwal = null) {
     if (!idTiketMasuk) return;
 
-    // KILL SWITCH: Matikan notifikasi berdering seketika saat chat dibuka
     hentikanNotifChat();
-
-    // MITIGASI LIMIT 100 KONEKSI: Nyalakan soket dbChat HANYA saat ruang komunikasi dibuka
     goOnline(dbChat);
 
     idRuangObrolanAktif = idTiketMasuk;
     waktuBukaRuang = Date.now();
 
-    if (tiketAwal && tiketAwal.wa_klien) {
-        if (!sesiOrderDiterimaMap[idTiketMasuk]) {
-            sesiOrderDiterimaMap[idTiketMasuk] = { accepted: false, wa_klien: tiketAwal.wa_klien };
-        } else {
-            sesiOrderDiterimaMap[idTiketMasuk].wa_klien = tiketAwal.wa_klien;
+    if (tiketAwal) {
+        memoriRuteSesiMap[idTiketMasuk] = tiketAwal;
+        if (tiketAwal.wa_klien) {
+            if (!sesiOrderDiterimaMap[idTiketMasuk]) {
+                sesiOrderDiterimaMap[idTiketMasuk] = { accepted: false, wa_klien: tiketAwal.wa_klien };
+            } else {
+                sesiOrderDiterimaMap[idTiketMasuk].wa_klien = tiketAwal.wa_klien;
+            }
         }
     }
 
@@ -229,13 +269,12 @@ export function bukaRuangKomunikasi(idTiketMasuk, namaKlien = "Klien", tiketAwal
         panelChat.classList.remove('hidden-state');
     }
 
-    if (tiketAwal && typeof window.gambarRutePesananOSRM === 'function') {
-        window.gambarRutePesananOSRM(tiketAwal);
+    if (tiketAwal && typeof window.gambarRutePesananOSRM === 'function' && !window.__BGT_CLEARED_ROUTES?.[idTiketMasuk]) {
+        window.gambarRutePesananOSRM(tiketAwal, idTiketMasuk);
     }
 
     pasangSarafInteraksi();
 
-    // SYNC-06 FIX: Pastikan listener touchmove/touchend dokumen terpasang kembali saat chat dibuka ulang
     if (window.DriverChat_handleTouchMove) {
         document.removeEventListener('touchmove', window.DriverChat_handleTouchMove);
         document.removeEventListener('mousemove', window.DriverChat_handleTouchMove);
@@ -296,7 +335,6 @@ function pasangSarafInteraksi() {
 
     btnBack.addEventListener('click', akhiriSesiKomunikasi);
 
-    // SPESIFIKASI 4.2: Ganti confirm() dengan window.showConfirm()
     btnHapus.addEventListener('click', async () => {
         if (await window.showConfirm(
             "HAPUS SESI OBROLAN",
@@ -315,10 +353,25 @@ function pasangSarafInteraksi() {
             return;
         }
 
+        // Tombol gambar ulang rute di peta jika driver sebelumnya menekan "Bersihkan Rute"
+        const btnGambarUlangRute = e.target.closest('.btn-redraw-osrm-route');
+        if (btnGambarUlangRute) {
+            const idSesi = idRuangObrolanAktif;
+            if (idSesi && window.__BGT_CLEARED_ROUTES) {
+                delete window.__BGT_CLEARED_ROUTES[idSesi];
+            }
+            const dataRute = memoriRuteSesiMap[idSesi];
+            if (dataRute && typeof window.gambarRutePesananOSRM === 'function') {
+                window.gambarRutePesananOSRM(dataRute, idSesi);
+                akhiriSesiKomunikasi();
+                if (window.showToast) window.showToast("Rute jalan raya ditampilkan kembali di peta.", "success");
+            }
+            return;
+        }
+
         const btnTolak = e.target.closest('.btn-tolak-order');
         const btnTerima = e.target.closest('.btn-terima-order');
 
-        // SPESIFIKASI 4.2: Ganti confirm() dengan window.showConfirm()
         if (btnTolak) {
             if (await window.showConfirm(
                 "TOLAK PESANAN",
@@ -342,7 +395,7 @@ function pasangSarafInteraksi() {
                     ]);
 
                     hapusItemInboxLokal(uid, idSesi);
-                    if (typeof window.bersihkanRutePesanan === 'function') window.bersihkanRutePesanan();
+                    if (typeof window.bersihkanRutePesanan === 'function') window.bersihkanRutePesanan(true);
 
                     setTimeout(() => {
                         remove(ref(dbRadar, `radar_tiket/${uid}/${idSesi}`)).catch(() => {});
@@ -359,7 +412,6 @@ function pasangSarafInteraksi() {
             const actionArea = btnTerima.closest('.katalog-action-area');
 
             try {
-                // SYNC-05 FIX: Gunakan data-waklien langsung dari atribut kartu katalog_order (hemat 2x bacaan RTDB get())
                 let noWaKlien = actionArea ? (actionArea.getAttribute('data-waklien') || '') : '';
                 if (auth.currentUser && idRuangObrolanAktif) {
                     const uid = auth.currentUser.uid;
@@ -765,12 +817,21 @@ function pasangSarafInteraksi() {
 }
 
 export function akhiriSesiKomunikasi() {
+    const sesiSebelumnya = idRuangObrolanAktif;
     idRuangObrolanAktif = null;
-    if (typeof pemantauPesan === 'function') { pemantauPesan(); pemantauPesan = null; }
-    if (typeof pemantauPesanUbah === 'function') { pemantauPesanUbah(); pemantauPesanUbah = null; }
 
-    // MITIGASI LIMIT 100 KONEKSI: Putus segera koneksi dbChat saat keluar dari ruang obrolan
-    goOffline(dbChat);
+    // Jika sesi ini BELUM diambil (atau tidak ada order aktif), matikan pemantau & putus koneksi dbChat untuk hemat 100 koneksi.
+    // NAMUN jika sesi ini adalah order yang SUDAH DIAMBIL (driver sedang meluncur/membuka Google Maps), biarkan pemantauPesan tetap hidup di latar belakang agar chat baru dari penumpang tetap berdering & memunculkan notifikasi!
+    const apakahSesiSudahDiambil = Boolean(sesiSebelumnya && sesiOrderDiterimaMap[sesiSebelumnya]?.accepted);
+
+    if (!apakahSesiSudahDiambil) {
+        if (typeof pemantauPesan === 'function') { pemantauPesan(); pemantauPesan = null; }
+        if (typeof pemantauPesanUbah === 'function') { pemantauPesanUbah(); pemantauPesanUbah = null; }
+        goOffline(dbChat);
+    } else {
+        // Tetap simpan idRuangObrolanAktif di pemantau latar belakang
+        idRuangObrolanAktif = sesiSebelumnya;
+    }
 
     if (intervalRekamanGlobal) { clearInterval(intervalRekamanGlobal); intervalRekamanGlobal = null; }
 
@@ -803,7 +864,8 @@ async function hapusSesiObrolanMutlak() {
         goOnline(dbChat);
         hapusItemInboxLokal(uid, idSesi);
         delete sesiOrderDiterimaMap[idSesi];
-        if (typeof window.bersihkanRutePesanan === 'function') window.bersihkanRutePesanan();
+        delete memoriRuteSesiMap[idSesi];
+        if (typeof window.bersihkanRutePesanan === 'function') window.bersihkanRutePesanan(true);
 
         await Promise.allSettled([
             remove(ref(dbRadar, `radar_tiket/${uid}/${idSesi}`)),
@@ -814,7 +876,12 @@ async function hapusSesiObrolanMutlak() {
     } catch (err) {
         console.error("Gagal menghapus:", err);
     }
-    akhiriSesiKomunikasi();
+    idRuangObrolanAktif = null;
+    if (typeof pemantauPesan === 'function') { pemantauPesan(); pemantauPesan = null; }
+    if (typeof pemantauPesanUbah === 'function') { pemantauPesanUbah(); pemantauPesanUbah = null; }
+    goOffline(dbChat);
+    const panel = document.getElementById('panel-komunikasi-utama');
+    if (panel) panel.classList.add('hidden-state');
 }
 
 // ==========================================================================
@@ -882,7 +949,6 @@ function mulaiDengarPesan() {
     const referensi = query(ref(dbChat, `sesi_komunikasi/${idSesiSaatIni}/pesan`), limitToLast(50));
     const wadahChat = document.getElementById('chat-body');
 
-    // Sinkronkan status ACCEPTED dari metadata_order jika ruang dibuka ulang dari Inbox
     if (idSesiSaatIni && !sesiOrderDiterimaMap[idSesiSaatIni]?.accepted) {
         get(ref(dbChat, `sesi_komunikasi/${idSesiSaatIni}/metadata_order`)).then((snap) => {
             if (snap && snap.exists()) {
@@ -904,21 +970,60 @@ function mulaiDengarPesan() {
         if (!pesan) return;
 
         const isPesanBaru = (pesan.waktu && pesan.waktu > waktuBukaRuang);
+        const panelChat = document.getElementById('panel-komunikasi-utama');
+        const isPanelChatTerbuka = panelChat && !panelChat.classList.contains('hidden-state');
+
+        // Tangkap sinyal "🔔 DERINGKAN DRIVER" (sistem_ping) di ruang obrolan
+        if (pesan.tipe === 'sistem_ping') {
+            if (isPesanBaru) {
+                mainkanNotifikasiPesanMasuk();
+                try { if ('vibrate' in navigator) navigator.vibrate([600, 150, 600, 150, 800]); } catch (e) {}
+                bacakanPesanChatKokpit("Perhatian! Penumpang memanggil Anda di ruang obrolan!");
+                if (document.visibilityState === 'hidden' || !isPanelChatTerbuka) {
+                    tampilkanBannerNotifChatLatarBelakang(
+                        "🔔 PENUMPANG MEMANGGIL ANDA!",
+                        pesan.konten || "Penumpang menekan tombol Deringkan Driver. Ketuk untuk membuka obrolan!",
+                        idSesiSaatIni
+                    );
+                }
+                if (window.showToast) window.showToast("🔔 Penumpang memanggil Anda!", "warning");
+            }
+            return;
+        }
 
         if (pesan.pengirim === 'klien') {
             if (pesan.tipe === 'teks') {
                 renderSmartReplyDriver(pesan.konten);
             }
 
-            // SPESIFIKASI 3.2: Hanya bunyikan notifikasi & update inbox_mitra untuk pesan baru setelah ruang dibuka (pesan.waktu > waktuBukaRuang)
             if (isPesanBaru) {
                 mainkanNotifikasiPesanMasuk();
+                try { if ('vibrate' in navigator) navigator.vibrate([400, 150, 400, 150, 600]); } catch (e) {}
+
                 const indikatorKedip = document.getElementById('chat-notif-dot');
                 if (indikatorKedip) indikatorKedip.classList.remove('hidden-state');
 
+                let previewTeks = pesan.tipe === 'teks' ? pesan.konten : (pesan.tipe === 'lokasi' ? '📍 Mengirim Titik Lokasi' : (pesan.tipe === 'audio' ? '🎤 Mengirim Pesan Suara' : (pesan.tipe === 'katalog_order' ? '📜 Mengirim Katalog Order' : '🖼️ Mengirim Gambar')));
+
+                // INOVASI SUARA KOKPIT & NOTIFIKASI LATAR BELAKANG SAAT CHAT MASUK KETIKA BUKA APLIKASI LAIN!
+                if (pesan.tipe !== 'katalog_order') {
+                    if (pesan.tipe === 'teks') {
+                        bacakanPesanChatKokpit(`Pesan baru dari penumpang. ${String(pesan.konten).substring(0, 120)}`);
+                    } else {
+                        bacakanPesanChatKokpit(`Penumpang mengirim ${previewTeks.replace(/[^\w\s]/gi, '')}`);
+                    }
+
+                    if (document.visibilityState === 'hidden' || !isPanelChatTerbuka) {
+                        tampilkanBannerNotifChatLatarBelakang(
+                            `💬 Pesan Baru dari Penumpang`,
+                            previewTeks,
+                            idSesiSaatIni
+                        );
+                    }
+                }
+
                 if (auth.currentUser && idRuangObrolanAktif) {
                     const uid = auth.currentUser.uid;
-                    let previewTeks = pesan.tipe === 'teks' ? pesan.konten : (pesan.tipe === 'lokasi' ? '📍 Lokasi Baru' : (pesan.tipe === 'audio' ? '🎤 Suara Baru' : (pesan.tipe === 'katalog_order' ? '📜 Mengirim Katalog Order' : '🖼️ Gambar Baru')));
                     const waktuSekarang = Date.now();
                     update(ref(dbChat, `inbox_mitra/${uid}/${idRuangObrolanAktif}`), {
                         pesan_terakhir: previewTeks,
@@ -935,7 +1040,6 @@ function mulaiDengarPesan() {
         const posisiKelas = pesan.pengirim === 'mitra' ? 'msg-mitra' : 'msg-klien';
         let htmlKonten = '';
 
-        // SPESIFIKASI 3.4: Sanitasi Anti-XSS pada seluruh konten teks dan katalog order
         if (pesan.tipe === 'teks') {
             htmlKonten = `<p>${escapeHTML(pesan.konten)}</p>`;
         } else if (pesan.tipe === 'katalog_order') {
@@ -944,16 +1048,22 @@ function mulaiDengarPesan() {
                 const formatRp = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(k.harga) || 0);
                 const warnaLayanan = k.layanan === 'RIDE' ? '#3b82f6' : (k.layanan === 'EXPRESS' ? '#f59e0b' : '#10b981');
 
-                // SYNC-03 FIX: Teruskan waypoints & toko_jastip ke gambarRutePesananOSRM agar titik singgah tidak terhapus
-                if ((k.pickup_coord || k.dropoff_coord) && typeof window.gambarRutePesananOSRM === 'function') {
-                    window.gambarRutePesananOSRM({
-                        pickup_coord: k.pickup_coord,
-                        dropoff_coord: k.dropoff_coord,
-                        pickup_alamat: k.jemput,
-                        dropoff_alamat: k.tujuan,
-                        waypoints: k.waypoints || '',
-                        toko_jastip: k.toko_jastip || null
-                    });
+                const objekRuteKatalog = {
+                    pickup_coord: k.pickup_coord,
+                    dropoff_coord: k.dropoff_coord,
+                    pickup_alamat: k.jemput,
+                    dropoff_alamat: k.tujuan,
+                    waypoints: k.waypoints || '',
+                    toko_jastip: k.toko_jastip || null
+                };
+                if (idSesiSaatIni) {
+                    memoriRuteSesiMap[idSesiSaatIni] = objekRuteKatalog;
+                }
+
+                // Jangan menggambar ulang secara paksa jika driver sudah menekan tombol "Bersihkan Rute" untuk sesi ini
+                const sudahDihapusDriver = Boolean(idSesiSaatIni && window.__BGT_CLEARED_ROUTES?.[idSesiSaatIni]);
+                if (!sudahDihapusDriver && (k.pickup_coord || k.dropoff_coord) && typeof window.gambarRutePesananOSRM === 'function') {
+                    window.gambarRutePesananOSRM(objekRuteKatalog, idSesiSaatIni);
                 }
 
                 let mapsUrl = `https://www.google.com/maps/dir/?api=1`;
@@ -999,7 +1109,6 @@ function mulaiDengarPesan() {
                     </div>`;
                 }
 
-                // SYNC-05 FIX: Jika pesanan sudah diambil melalui Modal Sergap, langsung tampilkan ORDER DIAMBIL + Tombol WA Penumpang
                 const waDriverLokal = document.getElementById('lock-wa')?.value || k.wa_driver || '';
                 const waKlienDariKatalog = k.wa_klien || sesiOrderDiterimaMap[idRuangObrolanAktif]?.wa_klien || '';
                 const sudahDiambil = Boolean(sesiOrderDiterimaMap[idRuangObrolanAktif]?.accepted);
@@ -1037,9 +1146,14 @@ function mulaiDengarPesan() {
                             <span style="font-size:1.2rem; color:#ceab6b; font-weight:900; font-family:monospace;">${formatRp}</span>
                             ${htmlBadgeTip}
                         </div>
-                        <a href="${mapsUrl}" target="_blank" style="background:#2563eb; color:#fff; text-align:center; padding:8px; border-radius:8px; margin-top:4px; font-weight:bold; font-size:0.7rem; text-decoration:none; display:flex; justify-content:center; align-items:center; gap:6px; box-shadow:0 4px 10px rgba(0,0,0,0.3);">
-                            <i class="fa-solid fa-diamond-turn-right"></i> CEK PETA NAVIGASI
-                        </a>
+                        <div style="display:flex; gap:6px; margin-top:4px;">
+                            <a href="${mapsUrl}" target="_blank" style="flex:1; background:#2563eb; color:#fff; text-align:center; padding:8px; border-radius:8px; font-weight:bold; font-size:0.68rem; text-decoration:none; display:flex; justify-content:center; align-items:center; gap:5px; box-shadow:0 4px 10px rgba(0,0,0,0.3);">
+                                <i class="fa-solid fa-diamond-turn-right"></i> GOOGLE MAPS
+                            </a>
+                            <button type="button" class="btn-redraw-osrm-route" style="background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.4); color:#10b981; padding:8px 10px; border-radius:8px; font-weight:bold; font-size:0.68rem; cursor:pointer; display:flex; justify-content:center; align-items:center; gap:4px;" title="Tampilkan Rute di Peta Aplikasi">
+                                <i class="fa-solid fa-route"></i> RUTE
+                            </button>
+                        </div>
                         ${actionButtons}
                     </div>
                 `;
@@ -1099,7 +1213,7 @@ GPS ASLI: ${pesan.forensik.exif.lokasi_asli}`;
 
         const idUnik = snapshot.key;
 
-        if (pesan.pengirim === 'klien' && pesan.status !== 'read') {
+        if (pesan.pengirim === 'klien' && pesan.status !== 'read' && isPanelChatTerbuka && document.visibilityState === 'visible') {
             update(ref(dbChat, `sesi_komunikasi/${idRuangObrolanAktif}/pesan/${idUnik}`), { status: 'read' }).catch(() => {});
         }
 
@@ -1111,10 +1225,12 @@ GPS ASLI: ${pesan.forensik.exif.lokasi_asli}`;
         }
 
         const extraCardClass = (pesan.tipe === 'katalog_order' || pesan.tipe === 'lokasi' || pesan.tipe === 'gambar') ? ' msg-katalog-card' : '';
-        wadahChat.insertAdjacentHTML('beforeend', `<div id="${escapeHTML(idUnik)}" class="msg-bubble ${posisiKelas}${extraCardClass}"><div class="msg-content">${htmlKonten}</div><span class="msg-time" style="display: flex; align-items: center; justify-content: flex-end; margin-top: 2px;">${new Date(pesan.waktu).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}${statusIkon}</span></div>`);
+        if (wadahChat && ! document.getElementById(idUnik)) {
+            wadahChat.insertAdjacentHTML('beforeend', `<div id="${escapeHTML(idUnik)}" class="msg-bubble ${posisiKelas}${extraCardClass}"><div class="msg-content">${htmlKonten}</div><span class="msg-time" style="display: flex; align-items: center; justify-content: flex-end; margin-top: 2px;">${new Date(pesan.waktu).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}${statusIkon}</span></div>`);
 
-        clearTimeout(wadahChat.scrollTimer);
-        wadahChat.scrollTimer = setTimeout(() => wadahChat.scrollTo({ top: wadahChat.scrollHeight, behavior: 'smooth' }), 150);
+            clearTimeout(wadahChat.scrollTimer);
+            wadahChat.scrollTimer = setTimeout(() => wadahChat.scrollTo({ top: wadahChat.scrollHeight, behavior: 'smooth' }), 150);
+        }
     });
 
     if (pemantauPesanUbah) pemantauPesanUbah();
@@ -1179,33 +1295,38 @@ document.addEventListener('touchstart', hentikanNotifChat, { passive: true });
 export function mainkanNotifikasiPesanMasuk() {
     if (isChatAlarmPlaying) return;
 
-    if (!audioCtxChat) { audioCtxChat = new (window.AudioContext || window.webkitAudioContext)(); }
-    if (audioCtxChat.state === 'suspended') audioCtxChat.resume();
+    try {
+        if (!audioCtxChat) { audioCtxChat = new (window.AudioContext || window.webkitAudioContext)(); }
+        if (audioCtxChat.state === 'suspended') audioCtxChat.resume().catch(() => {});
+    } catch (e) { return; }
 
     isChatAlarmPlaying = true;
 
     const playPing = () => {
-        if (!isChatAlarmPlaying) return;
-        const osc = audioCtxChat.createOscillator();
-        const gain = audioCtxChat.createGain();
+        if (!isChatAlarmPlaying || !audioCtxChat) return;
+        try {
+            if (audioCtxChat.state === 'suspended') audioCtxChat.resume().catch(() => {});
+            const osc = audioCtxChat.createOscillator();
+            const gain = audioCtxChat.createGain();
 
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(1567.98, audioCtxChat.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(3135.96, audioCtxChat.currentTime + 0.1);
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(1567.98, audioCtxChat.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(3135.96, audioCtxChat.currentTime + 0.12);
 
-        gain.gain.setValueAtTime(0, audioCtxChat.currentTime);
-        gain.gain.linearRampToValueAtTime(1, audioCtxChat.currentTime + 0.05);
-        gain.gain.exponentialRampToValueAtTime(0.001, audioCtxChat.currentTime + 0.5);
+            gain.gain.setValueAtTime(0.01, audioCtxChat.currentTime);
+            gain.gain.linearRampToValueAtTime(0.9, audioCtxChat.currentTime + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtxChat.currentTime + 0.55);
 
-        osc.connect(gain);
-        gain.connect(audioCtxChat.destination);
+            osc.connect(gain);
+            gain.connect(audioCtxChat.destination);
 
-        osc.start(audioCtxChat.currentTime);
-        osc.stop(audioCtxChat.currentTime + 0.5);
+            osc.start(audioCtxChat.currentTime);
+            osc.stop(audioCtxChat.currentTime + 0.55);
+        } catch (e) {}
     };
 
     playPing();
-    chatAlarmInterval = setInterval(playPing, 3000);
+    chatAlarmInterval = setInterval(playPing, 2500);
 }
 
 function dapatkanKunciLokasiForensik() {
@@ -1219,8 +1340,6 @@ function dapatkanKunciLokasiForensik() {
     });
 }
 
-// SPESIFIKASI 3.3: Ekstraksi EXIF Asli -> On-Device WebP Micro-Compressor (Max 1280px, Quality 0.75) -> Unggah ke Cloudinary
-// Dilengkapi AbortController timeout 1500ms pada ipify agar tidak pernah macet saat sinyal buruk
 async function ekstrakForensikDanKirim(fileGambar, asalTangkapan) {
     if (window.showToast) window.showToast("Mengekstrak Metadata & Mengompresi...", "info");
 
@@ -1252,7 +1371,6 @@ async function ekstrakForensikDanKirim(fileGambar, asalTangkapan) {
     const cpu = navigator.hardwareConcurrency ? `${navigator.hardwareConcurrency} Core` : "N/A";
     const lokasiFaktual = await dapatkanKunciLokasiForensik();
 
-    // 1. Ekstrak metadata EXIF dari fileGambar asli terlebih dahulu agar data forensik 100% akurat
     let dataExifAsli = null;
     if (asalTangkapan === "Galeri Perangkat") {
         try {
@@ -1274,10 +1392,7 @@ async function ekstrakForensikDanKirim(fileGambar, asalTangkapan) {
     if (dataExifAsli) dataForensik.exif = dataExifAsli;
 
     try {
-        // 2. Kompresi lokal ke Blob image/webp (Max 1280px, Quality 0.75)
         const blobWebP = await kompresGambarKeWebP(fileGambar, 1280, 0.75);
-
-        // 3. Unggah Blob WebP ke Cloudinary menggunakan modul terpadu cloud-media.js
         const urlGambar = await uploadMediaKeCloudinary(blobWebP, 'image', CLOUDINARY_PRESET);
         await kirimPayloadPesan(urlGambar, "gambar", dataForensik);
         const loadEl = document.getElementById(idLoading);
@@ -1352,14 +1467,18 @@ function tutupBottomSheetForensik() {
 }
 
 // ==========================================================================
-// 6. MANAJEMEN KONEKSI CERDAS (MUTLAK 0 KONEKSI SAAT BACKGROUND / LUAR CHAT)
+// 6. MANAJEMEN KONEKSI CERDAS (TETAP SIAGA DI BACKGROUND SAAT ADA SESI ORDER AKTIF!)
 // ==========================================================================
 document.addEventListener("visibilitychange", () => {
+    const adaOrderAktif = Boolean(idRuangObrolanAktif || Object.values(sesiOrderDiterimaMap).some(v => v && v.accepted));
     if (document.visibilityState === 'hidden') {
-        // Segera putus koneksi dbChat saat aplikasi di latar belakang
-        goOffline(dbChat);
+        // HANYA putus koneksi dbChat jika TIDAK ADA sesi obrolan / order aktif.
+        // Jika sedang ada order aktif (misal Driver sedang membuka Google Maps untuk menjemput penumpang),
+        // koneksi dbChat WAJIB TETAP HIDUP agar pesan chat baru dari penumpang langsung berbunyi & memunculkan banner notifikasi!
+        if (!adaOrderAktif) {
+            goOffline(dbChat);
+        }
     } else {
-        // Hanya sambungkan kembali dbChat jika ruang komunikasi sedang terbuka
         if (idRuangObrolanAktif) {
             goOnline(dbChat);
         }

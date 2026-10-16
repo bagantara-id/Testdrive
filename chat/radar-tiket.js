@@ -1,18 +1,20 @@
 // ==========================================================================
 // FILE: chat/radar-tiket.js
 // FUNGSI: Mesin Radar RTDB Ke-3 (futaqi-ali), Layar Sergap Pesanan Penuh (Inovasi 1),
-//         Web Audio Sirine & Getaran Taktis, serta Suara Asisten Kokpit id-ID (Inovasi 2)
-// ARSITEKTUR: On-Demand Radar Socket (Hanya Online saat Aktif/Standby)
+//         Web Audio Sirine & Getaran Taktis, Suara Asisten Kokpit id-ID (Inovasi 2),
+//         Notifikasi Banner Sistem Latar Belakang, & Penangkap Tombol "Deringkan Driver"
 // ==========================================================================
 
 import { dbChat, dbRadar } from './config-chat.js';
 import { configChat } from '../js/config/credentials.js';
-import { bukaRuangKomunikasi, simpanItemInboxLokal, hapusItemInboxLokal, tandaiOrderSudahDiambil, escapeHTML, goOnline, goOffline } from './app-chat.js';
-import { ref, onChildAdded, remove, update, push } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
+import { bukaRuangKomunikasi, simpanItemInboxLokal, hapusItemInboxLokal, tandaiOrderSudahDiambil, mainkanNotifikasiPesanMasuk, escapeHTML, goOnline, goOffline } from './app-chat.js';
+import { ref, onChildAdded, onChildChanged, remove, update, push } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
 
 let referensiRadar = null;
 let uidDriverAktif = null;
 let pemantauRadar = null;
+let pemantauRadarUbah = null;
+let lastPingHandledTime = 0;
 
 // State Modal Sergap Pesanan (Inovasi 1)
 let tiketSergapAktif = null;
@@ -38,7 +40,7 @@ function inisialisasiImmortalityLatarBelakang() {
         if ('mediaSession' in navigator) {
             navigator.mediaSession.metadata = new MediaMetadata({
                 title: "Bagantara - Radar Aktif",
-                artist: "Menunggu Pesanan Masuk...",
+                artist: "Siaga Menerima Order & Chat...",
                 album: "Sistem Operasional Driver",
                 artwork: [{ src: './assets/icon-192.png', sizes: '192x192', type: 'image/png' }]
             });
@@ -55,6 +57,38 @@ function hentikanImmortality() {
         silentAudioLoop.currentTime = 0;
         if ('mediaSession' in navigator) navigator.mediaSession.metadata = null;
     }
+}
+
+// =======================================================================
+// 🔔 INOVASI BARU: PEMICU BANNER NOTIFIKASI SISTEM ANDROID SAAT BUKA APLIKASI LAIN
+// =======================================================================
+export async function tampilkanNotifikasiSistemLokal(judul, isi, idTiket = '', tipeNotif = 'ORDER') {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+    const opsiNotif = {
+        body: isi,
+        icon: './assets/icon-192.png',
+        badge: './assets/icon-192.png',
+        tag: idTiket ? `bgt-${tipeNotif}-${idTiket}` : `bgt-${tipeNotif}-${Date.now()}`,
+        renotify: true,
+        requireInteraction: true,
+        vibrate: [600, 200, 600, 200, 800, 200, 600],
+        data: { idTiket: idTiket, type: tipeNotif }
+    };
+
+    try {
+        if ('serviceWorker' in navigator) {
+            const reg = await navigator.serviceWorker.ready;
+            if (reg && typeof reg.showNotification === 'function') {
+                await reg.showNotification(judul, opsiNotif);
+                return;
+            }
+        }
+    } catch (e) {}
+
+    try {
+        new Notification(judul, opsiNotif);
+    } catch (e) {}
 }
 
 // =======================================================================
@@ -80,6 +114,11 @@ function initAudioContext() {
 
 export function bunyikanSonarTiket() {
     initAudioContext();
+
+    // Pastikan loop audio latar belakang tetap berputar agar OS Android mengizinkan output suara di background
+    if (silentAudioLoop && silentAudioLoop.paused) {
+        silentAudioLoop.play().catch(() => {});
+    }
 
     // 1. Getaran Berirama Taktis
     try {
@@ -149,25 +188,13 @@ export function hentikanSonar() {
 // =======================================================================
 // 🗣️ INOVASI 2: SUARA ASISTEN KOKPIT OTOMATIS (0 KUOTA - WEB SPEECH API)
 // =======================================================================
-export function bacakanPesananKokpit(tiket) {
-    if (!('speechSynthesis' in window) || !tiket) return;
+export function bacakanTeksKokpit(teksSuara) {
+    if (!('speechSynthesis' in window) || !teksSuara) return;
     try {
         window.speechSynthesis.cancel();
-
-        const layanan = String(tiket.layanan || 'RIDE').toUpperCase();
-        const jemput = String(tiket.pickup_alamat || 'Titik jemput penumpang').replace(/[,()]/g, ' ');
-        const tujuan = String(tiket.dropoff_alamat || 'Titik tujuan penumpang').replace(/[,()]/g, ' ');
-        const nominalTarif = Number(tiket.harga_tawaran || tiket.harga_dasar || 0);
-        const nominalTip = Number(tiket.tip_nominal || 0);
-
-        let teksSuara = `Perhatian. Pesanan baru masuk. Layanan ${layanan}. Lokasi jemput di ${jemput}. Tujuan ke ${tujuan}. Estimasi tarif ${nominalTarif.toLocaleString('id-ID')} rupiah.`;
-        if (nominalTip > 0) {
-            teksSuara += ` Termasuk tip prioritas ${nominalTip.toLocaleString('id-ID')} rupiah.`;
-        }
-
         const utterance = new SpeechSynthesisUtterance(teksSuara);
         utterance.lang = 'id-ID';
-        utterance.rate = 1.02;
+        utterance.rate = 1.03;
         utterance.pitch = 1.0;
         utterance.volume = 1.0;
 
@@ -177,6 +204,21 @@ export function bacakanPesananKokpit(tiket) {
 
         window.speechSynthesis.speak(utterance);
     } catch (e) {}
+}
+
+export function bacakanPesananKokpit(tiket) {
+    if (!tiket) return;
+    const layanan = String(tiket.layanan || 'RIDE').toUpperCase();
+    const jemput = String(tiket.pickup_alamat || 'Titik jemput penumpang').replace(/[,()]/g, ' ');
+    const tujuan = String(tiket.dropoff_alamat || 'Titik tujuan penumpang').replace(/[,()]/g, ' ');
+    const nominalTarif = Number(tiket.harga_tawaran || tiket.harga_dasar || 0);
+    const nominalTip = Number(tiket.tip_nominal || 0);
+
+    let teksSuara = `Perhatian. Pesanan baru masuk. Layanan ${layanan}. Lokasi jemput di ${jemput}. Tujuan ke ${tujuan}. Estimasi tarif ${nominalTarif.toLocaleString('id-ID')} rupiah.`;
+    if (nominalTip > 0) {
+        teksSuara += ` Termasuk tip prioritas ${nominalTip.toLocaleString('id-ID')} rupiah.`;
+    }
+    bacakanTeksKokpit(teksSuara);
 }
 
 export function hentikanBicaraKokpit() {
@@ -296,7 +338,6 @@ export function tampilkanModalSergapPesanan(idTiket, tiket) {
 
     if (elExtraInfo) {
         const extraParts = [];
-        // SYNC-02 FIX: Ekstrak objek toko_jastip { lat, lng, address, notes } dari aplikasi Publik agar tidak tampil "[object Object]"
         if (tiket.toko_jastip) {
             let labelToko = '';
             if (typeof tiket.toko_jastip === 'object') {
@@ -315,8 +356,6 @@ export function tampilkanModalSergapPesanan(idTiket, tiket) {
             const estBelanja = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(Number(tiket.estimasi_belanja || 0));
             extraParts.push(`<div><i class="fa-solid fa-bag-shopping text-emerald-400 mr-1"></i> <b>Belanjaan:</b> ${totalItem} Item (Est: ${escapeHTML(estBelanja)})</div>`);
         }
-        // SYNC-03 FIX: Aplikasi Publik selalu mengisi multi_dropoffs minimal 1 elemen (tujuan utama).
-        // Hanya tampilkan badge Multi-Stop jika terdapat > 1 titik tujuan (titik singgah tambahan = length - 1).
         if (Array.isArray(tiket.multi_dropoffs) && tiket.multi_dropoffs.length > 1) {
             extraParts.push(`<div><i class="fa-solid fa-route text-amber-400 mr-1"></i> <b>Multi-Stop:</b> ${tiket.multi_dropoffs.length - 1} Titik Singgah Tambahan</div>`);
         }
@@ -342,12 +381,23 @@ export function tampilkanModalSergapPesanan(idTiket, tiket) {
 
     // Gambar preview rute OSRM di peta latar belakang
     if (typeof window.gambarRutePesananOSRM === 'function') {
-        window.gambarRutePesananOSRM(tiket);
+        if (window.__BGT_CLEARED_ROUTES) delete window.__BGT_CLEARED_ROUTES[idTiket];
+        window.gambarRutePesananOSRM(tiket, idTiket);
     }
 
     // Aktifkan Sirine Web Audio + Getaran Berirama + Suara Asisten Kokpit (id-ID)
     bunyikanSonarTiket();
     bacakanPesananKokpit(tiket);
+
+    // JIKA DRIVER SEDANG MEMBUKA APLIKASI LAIN (BACKGROUND), TEMBAKKAN BANNER NOTIFIKASI SISTEM ANDROID SECARA LOKAL!
+    if (document.visibilityState === 'hidden') {
+        tampilkanNotifikasiSistemLokal(
+            `🚨 ORDER ${layanan} MASUK (${formatRp})`,
+            `Penumpang: ${namaKlien} | Jemput: ${teksJemput}. Ketuk untuk terima pesanan!`,
+            idTiket,
+            'NEW_ORDER'
+        );
+    }
 
     if (timerCountdownSergap) clearInterval(timerCountdownSergap);
     timerCountdownSergap = setInterval(() => {
@@ -389,14 +439,11 @@ async function eksekusiTerimaPesananSergap() {
     const idTiket = idTiketSergapAktif;
     const tiket = tiketSergapAktif;
 
-    // 1. Hentikan sirine, getaran, dan suara kokpit seketika
     tutupModalSergap();
 
     try {
-        // Tandai di memori lokal bahwa order ini sudah diambil via Modal Sergap agar kartu katalog_order tidak menampilkan tombol ganda
         tandaiOrderSudahDiambil(idTiket, tiket.wa_klien || '');
 
-        // 2. Update status tiket di futaqi-ali menjadi ACCEPTED, lalu hapus umpan radar setelah 4 detik
         const refTiketRadar = ref(dbRadar, `radar_tiket/${uid}/${idTiket}`);
         await update(refTiketRadar, {
             status: 'ACCEPTED',
@@ -407,7 +454,6 @@ async function eksekusiTerimaPesananSergap() {
             remove(refTiketRadar).catch(() => {});
         }, 4000);
 
-        // 3. Simpan ke inbox_mitra (REST + memori lokal) & sinkronkan sesi_komunikasi di dbChat
         const itemInbox = {
             nama_klien: tiket.nama_klien || "Penumpang",
             layanan: tiket.layanan || "RIDE",
@@ -418,15 +464,13 @@ async function eksekusiTerimaPesananSergap() {
         simpanItemInboxLokal(uid, idTiket, itemInbox);
         await simpanInboxMitraViaREST(uid, idTiket, itemInbox);
 
-        // 4. Gambar rute jalan raya OSRM di peta driver
         if (typeof window.gambarRutePesananOSRM === 'function') {
-            window.gambarRutePesananOSRM(tiket);
+            if (window.__BGT_CLEARED_ROUTES) delete window.__BGT_CLEARED_ROUTES[idTiket];
+            window.gambarRutePesananOSRM(tiket, idTiket);
         }
 
-        // 5. Buka ruang obrolan dengan penumpang (otomatis menyalakan goOnline(dbChat))
         bukaRuangKomunikasi(idTiket, tiket.nama_klien || "Penumpang", tiket);
 
-        // 6. Update status metadata_order di sesi_komunikasi dan kirim konfirmasi otomatis
         await update(ref(dbChat, `sesi_komunikasi/${idTiket}/metadata_order`), {
             status: 'ACCEPTED',
             waktu_diterima: Date.now()
@@ -468,14 +512,12 @@ async function eksekusiTolakPesananSergap() {
     tutupModalSergap();
     hapusItemInboxLokal(uid, idTiket);
     if (typeof window.bersihkanRutePesanan === 'function') {
-        window.bersihkanRutePesanan();
+        window.bersihkanRutePesanan(true);
     }
 
     try {
-        // Hapus umpan dari futaqi-ali segera
         await remove(ref(dbRadar, `radar_tiket/${uid}/${idTiket}`)).catch(() => {});
 
-        // SYNC-04 FIX: Update metadata_order ke REJECTED + kirim sinyal sistem_tolak agar aplikasi Publik langsung mendeteksi penolakan
         goOnline(dbChat);
         await Promise.allSettled([
             update(ref(dbChat, `sesi_komunikasi/${idTiket}/metadata_order`), {
@@ -496,7 +538,6 @@ async function eksekusiTolakPesananSergap() {
                 remove(ref(dbChat, `inbox_mitra/${uid}/${idTiket}`)),
                 remove(ref(dbChat, `sesi_komunikasi/${idTiket}`))
             ]);
-            // Jika tidak sedang membuka ruang obrolan lain, putus kembali koneksi dbChat
             const panelChat = document.getElementById('panel-komunikasi-utama');
             if (!panelChat || panelChat.classList.contains('hidden-state')) {
                 goOffline(dbChat);
@@ -510,7 +551,7 @@ async function eksekusiTolakPesananSergap() {
 }
 
 // =======================================================================
-// 📡 KONTROL RADAR UTAMA (MESIN KE-3: futaqi-ali)
+// 📡 KONTROL RADAR UTAMA (MESIN KE-3: futaqi-ali) & PENANGKAP SONAR PING
 // =======================================================================
 export function periksaPintuMasuk() {
     return !!uidDriverAktif;
@@ -524,7 +565,6 @@ export function hidupkanRadar(uid) {
     inisialisasiImmortalityLatarBelakang();
     ikatEventModalSergap();
 
-    // MITIGASI LIMIT 100 KONEKSI: Nyalakan koneksi ke dbRadar (futaqi-ali) HANYA saat Driver Online
     goOnline(dbRadar);
 
     referensiRadar = ref(dbRadar, `radar_tiket/${uid}`);
@@ -532,6 +572,10 @@ export function hidupkanRadar(uid) {
     if (pemantauRadar) {
         pemantauRadar();
         pemantauRadar = null;
+    }
+    if (pemantauRadarUbah) {
+        pemantauRadarUbah();
+        pemantauRadarUbah = null;
     }
 
     pemantauRadar = onChildAdded(referensiRadar, async (snapshot) => {
@@ -548,13 +592,11 @@ export function hidupkanRadar(uid) {
             return;
         }
 
-        // Cegah penulisan ulang jika tiket sudah berstatus ACCEPTED
         if (tiket.status === 'ACCEPTED') {
             tandaiOrderSudahDiambil(idTiket, tiket.wa_klien || '');
             return;
         }
 
-        // Simpan ke inbox_mitra menggunakan REST ringan + memori lokal (0 Koneksi WebSocket dbChat)
         const payloadInbox = {
             nama_klien: tiket.nama_klien || "Penumpang",
             layanan: tiket.layanan || "ORDER",
@@ -568,8 +610,26 @@ export function hidupkanRadar(uid) {
         const indikatorKedip = document.getElementById('chat-notif-dot');
         if (indikatorKedip) indikatorKedip.classList.remove('hidden-state');
 
-        // Tampilkan Layar Sergap Pesanan Penuh + Getaran + Sirine Web Audio + Suara Kokpit
         tampilkanModalSergapPesanan(idTiket, tiket);
+    });
+
+    // INOVASI CERDIK: Tangkap sinyal tombol "🔔 DERINGKAN DRIVER (SONAR PING)" dari Penumpang secara real-time!
+    pemantauRadarUbah = onChildChanged(referensiRadar, (snapshot) => {
+        const tiket = snapshot.val();
+        const idTiket = snapshot.key;
+        if (!tiket || tiket.status === 'ACCEPTED' || tiket.status === 'REJECTED') return;
+
+        if (tiket.ping_alert && Number(tiket.ping_alert) > lastPingHandledTime) {
+            lastPingHandledTime = Number(tiket.ping_alert);
+            tampilkanModalSergapPesanan(idTiket, tiket);
+            bacakanTeksKokpit(`Perhatian! Penumpang ${tiket.nama_klien || ''} memanggil Anda! Segera terima pesanan di layar sergap!`);
+            tampilkanNotifikasiSistemLokal(
+                `🔔 PANGGILAN DARURAT PENUMPANG!`,
+                `${tiket.nama_klien || 'Penumpang'} menunggu konfirmasi order ${tiket.layanan || 'RIDE'}!`,
+                idTiket,
+                'SONAR_PING'
+            );
+        }
     });
 }
 
@@ -581,19 +641,43 @@ export function matikanRadar() {
         pemantauRadar();
         pemantauRadar = null;
     }
+    if (pemantauRadarUbah) {
+        pemantauRadarUbah();
+        pemantauRadarUbah = null;
+    }
 
-    // MITIGASI LIMIT 100 KONEKSI: Wajib putus koneksi dbRadar saat Driver Offline
     goOffline(dbRadar);
-
     uidDriverAktif = null;
 }
 
-// Dengarkan pesan dari Service Worker saat notifikasi FCM diklik di latar belakang
+// Jembatan penerima sinyal dari Service Worker (Saat push FCM masuk ketika sedang membuka aplikasi lain / saat notifikasi diklik)
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', (event) => {
-        if (event.data && event.data.type === 'BGT_FCM_ORDER_CLICK') {
+        if (!event.data) return;
+
+        if (event.data.type === 'BGT_FCM_ORDER_CLICK') {
             if (typeof window.bangunkanLayarOLED === 'function') {
                 window.bangunkanLayarOLED();
+            }
+            const notifData = event.data.data || {};
+            if (notifData.idTiket && notifData.type === 'CHAT_MESSAGE') {
+                bukaRuangKomunikasi(notifData.idTiket, notifData.namaKlien || 'Penumpang');
+            }
+        } else if (event.data.type === 'BGT_FCM_BACKGROUND_WAKEUP') {
+            // Bangunkan sirine & suara kokpit meskipun aplikasi sedang di latar belakang!
+            if (typeof window.bangunkanLayarOLED === 'function') {
+                window.bangunkanLayarOLED();
+            }
+            const data = event.data.data || {};
+            if (data.type === 'CHAT_MESSAGE') {
+                mainkanNotifikasiPesanMasuk();
+                bacakanTeksKokpit(`Pesan baru dari penumpang. ${data.body || 'Silakan buka ruang obrolan.'}`);
+            } else if (data.type === 'SONAR_PING') {
+                bunyikanSonarTiket();
+                bacakanTeksKokpit(`Perhatian! Penumpang memanggil Anda! Segera buka aplikasi Bagantara Driver!`);
+            } else {
+                bunyikanSonarTiket();
+                bacakanTeksKokpit(`Perhatian! Pesanan baru masuk! ${data.body || 'Segera buka aplikasi untuk menyergap pesanan.'}`);
             }
         }
     });
