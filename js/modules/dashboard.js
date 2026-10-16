@@ -120,10 +120,15 @@ export function hydrateUI() {
     window.__BGT_AGENDA_INFO = localSettings.info || '';
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        inisialisasiTemaOtomatis();
+        hydrateUI();
+    });
+} else {
     inisialisasiTemaOtomatis();
     hydrateUI();
-});
+}
 
 const btnThemeToggle = document.getElementById('btnThemeToggle');
 if (btnThemeToggle) {
@@ -151,14 +156,13 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
         }
 
         const target = btn.getAttribute('data-target');
-        const floaters = ['btn-telemetry-hud', 'btn-power', 'btn-recenter', 'btn-recenter-fisik'];
+        const floaters = ['btn-telemetry-hud', 'btn-power', 'btn-recenter', 'btn-recenter-fisik', 'btn-clear-route'];
 
         if (target !== 'map-only') {
             const tgtEl = document.getElementById(target);
             if (tgtEl) tgtEl.classList.remove('hidden-state');
             if (target === 'panel-ops') sinkronisasiTampilanTokenPeta();
             if (target === 'panel-inbox') {
-                // Tarik daftar inbox_mitra menggunakan REST fetch sekali jalan (0 WebSocket permanen)
                 inisialisasiInboxChat();
             }
             kunciSemuaSmartFields();
@@ -169,6 +173,10 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
                 if (!el) return;
                 if (id === 'btn-recenter-fisik') {
                     if (window.__BGT_TELEMETRY_CACHE && window.__BGT_TELEMETRY_CACHE.mode === 'standby') {
+                        el.classList.remove('hidden-state');
+                    }
+                } else if (id === 'btn-clear-route') {
+                    if (window.__BGT_HAS_ACTIVE_ROUTE) {
                         el.classList.remove('hidden-state');
                     }
                 } else {
@@ -186,12 +194,16 @@ document.querySelectorAll('.btn-close-panel').forEach(btn => {
         const mapBtn = document.querySelector('[data-target="map-only"]');
         if (mapBtn) mapBtn.classList.replace('text-gray-500', 'text-theme-gold');
 
-        const floaters = ['btn-telemetry-hud', 'btn-power', 'btn-recenter', 'btn-recenter-fisik'];
+        const floaters = ['btn-telemetry-hud', 'btn-power', 'btn-recenter', 'btn-recenter-fisik', 'btn-clear-route'];
         floaters.forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
             if (id === 'btn-recenter-fisik') {
                 if (window.__BGT_TELEMETRY_CACHE && window.__BGT_TELEMETRY_CACHE.mode === 'standby') {
+                    el.classList.remove('hidden-state');
+                }
+            } else if (id === 'btn-clear-route') {
+                if (window.__BGT_HAS_ACTIVE_ROUTE) {
                     el.classList.remove('hidden-state');
                 }
             } else {
@@ -250,7 +262,6 @@ async function muatDataPengemudi(data) {
             const res = await fetch(dbUrl);
             const rtdbData = await res.json();
 
-            // Simpan snapshot boot RTDB agar periksaResureksiStatus di gps-engine.js tidak melakukan GET ulang (Hemat 50% Read RTDB saat boot)
             window.__BGT_RTDB_STATUS_BOOT = rtdbData || null;
 
             if (rtdbData) {
@@ -271,7 +282,6 @@ async function muatDataPengemudi(data) {
     hydrateUI();
 
     try {
-        // Inisialisasi peta (Radar dbRadar futaqi-ali akan otomatis dinyalakan oleh gps-engine.js hanya saat status Online aktif/standby)
         inisialisasiPeta();
     } catch (err) { console.error("[SISTEM] Gagal inisialisasi peta:", err); }
 }
@@ -490,7 +500,6 @@ if (btnSaveProfile) {
 
             if (!response.ok) throw new Error(`Server menolak akses. Status: ${response.status}`);
 
-            // Sinkronkan juga ke cache profil 7 hari di localStorage
             perbaruiCacheProfilTerverifikasi({ kendaraan: kendaraan, plat: plat, wa: wa });
 
             btnSaveProfile.classList.remove('opacity-80', 'cursor-not-allowed');

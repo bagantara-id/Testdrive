@@ -1,7 +1,7 @@
 // ==========================================================================
 // FILE: js/modules/gps-engine.js
 // FUNGSI: Mesin Peta Hydra Multi-CDN, Transmisi Delta-Split, Geofencing Taktis,
-//         Rute Jalan Raya OSRM (Inovasi 3), OLED Blackout (Inovasi 4), & Wake-Lock (Inovasi 5)
+//         Rute Jalan Raya OSRM (Inovasi 3 - Real-Time LayerGroup), OLED Blackout (Inovasi 4), & Wake-Lock (Inovasi 5)
 // ==========================================================================
 
 import { auth } from '../core/firebase-config.js';
@@ -14,6 +14,8 @@ const OLED_IDLE_TIMEOUT_MS = 60000; // 60 Detik Inaktivitas pada Mode Mangkal (S
 const DEFAULT_ZONE_CENTER = { lat: -7.768049, lng: 112.196514 }; // Kediri / Pare (Sinkron dengan zona aktif aplikasi publik)
 
 window.__BGT_TELEMETRY_CACHE = window.__BGT_TELEMETRY_CACHE || { connected: false, accuracy: 0, jarak: 0, txTime: Date.now() };
+window.__BGT_CLEARED_ROUTES = window.__BGT_CLEARED_ROUTES || {};
+window.__BGT_HAS_ACTIVE_ROUTE = false;
 
 const btnPower = document.getElementById('btn-power');
 const btnRecenter = document.getElementById('btn-recenter');
@@ -43,12 +45,17 @@ let currentRadiusKm = 7.0;
 let isLightModeGlobal = false;
 let koordinatLokal = null;
 let isGeofenceValid = true;
+let isDOMInitialized = false;
 
-// Variabel Inovasi 3: Layer Rute Jalan Raya OSRM
+// Variabel Inovasi 3: Dedicated LayerGroup + AbortController + Render Token Anti-Ghost Polyline
+let orderRouteGroup = null;
 let orderRouteLayer = null;
 let orderPickupMarker = null;
 let orderDropoffMarker = null;
 let orderMultiMarkers = [];
+let osrmRouteAbortController = null;
+let routeRenderToken = 0;
+let activeRouteTicketId = null;
 
 // Variabel Inovasi 4: Mode Hantu Penghemat Baterai (OLED Tactical Blackout)
 let oledInactivityTimer = null;
@@ -179,7 +186,7 @@ window.bangunkanLayarOLED = bangunkanLayarOLED;
 });
 
 // ==========================================================================
-// INOVASI 3: GARIS RUTE JALAN RAYA OSRM GRATIS DI PETA DRIVER (SINKRON MULTI-STOP & WAYPOINTS)
+// INOVASI 3: GARIS RUTE JALAN RAYA OSRM REAL-TIME (ANTI-GHOST LAYER & INSTANT CLEAR)
 // ==========================================================================
 function parseKoordinatTiket(coordInput) {
     if (!coordInput) return null;
@@ -197,33 +204,90 @@ function parseKoordinatTiket(coordInput) {
     return null;
 }
 
-export function bersihkanRutePesanan() {
-    if (!mapSystem) return;
-    if (orderRouteLayer) {
-        mapSystem.removeLayer(orderRouteLayer);
-        orderRouteLayer = null;
+function pastikanOrderRouteGroup() {
+    if (!mapSystem) return null;
+    if (!orderRouteGroup || !mapSystem.hasLayer(orderRouteGroup)) {
+        orderRouteGroup = L.layerGroup().addTo(mapSystem);
     }
-    if (orderPickupMarker) {
-        mapSystem.removeLayer(orderPickupMarker);
-        orderPickupMarker = null;
+    return orderRouteGroup;
+}
+
+function tandaiLayerOrder(layer) {
+    if (layer) {
+        layer._isBgtOrderLayer = true;
     }
-    if (orderDropoffMarker) {
-        mapSystem.removeLayer(orderDropoffMarker);
-        orderDropoffMarker = null;
+    return layer;
+}
+
+export function bersihkanRutePesanan(tandaiManualDihapus = false) {
+    // 1. Naikkan token generasi & batalkan request OSRM yang masih mengambang di jaringan (Anti-Ghost Polyline)
+    routeRenderToken++;
+    if (osrmRouteAbortController) {
+        try { osrmRouteAbortController.abort(); } catch (e) {}
+        osrmRouteAbortController = null;
     }
-    if (Array.isArray(orderMultiMarkers) && orderMultiMarkers.length > 0) {
-        orderMultiMarkers.forEach(m => {
-            try { mapSystem.removeLayer(m); } catch (e) {}
+
+    if (tandaiManualDihapus && activeRouteTicketId) {
+        window.__BGT_CLEARED_ROUTES[activeRouteTicketId] = true;
+    }
+    window.__BGT_HAS_ACTIVE_ROUTE = false;
+
+    if (mapSystem) {
+        // 2. Bersihkan seluruh isi LayerGroup rute order seketika
+        if (orderRouteGroup) {
+            try { orderRouteGroup.clearLayers(); } catch (e) {}
+        }
+
+        // 3. Bersihkan referensi individual jika ada
+        if (orderRouteLayer) {
+            try { mapSystem.removeLayer(orderRouteLayer); } catch (e) {}
+            orderRouteLayer = null;
+        }
+        if (orderPickupMarker) {
+            try { mapSystem.removeLayer(orderPickupMarker); } catch (e) {}
+            orderPickupMarker = null;
+        }
+        if (orderDropoffMarker) {
+            try { mapSystem.removeLayer(orderDropoffMarker); } catch (e) {}
+            orderDropoffMarker = null;
+        }
+        if (Array.isArray(orderMultiMarkers) && orderMultiMarkers.length > 0) {
+            orderMultiMarkers.forEach(m => {
+                try { mapSystem.removeLayer(m); } catch (e) {}
+            });
+            orderMultiMarkers = [];
+        }
+
+        // 4. Sapu bersih semua layer yatim piatu (Ghost Polyline/GeoJSON/Marker) yang memiliki flag _isBgtOrderLayer
+        const layersToRemove = [];
+        mapSystem.eachLayer((lyr) => {
+            if (lyr && lyr._isBgtOrderLayer) {
+                layersToRemove.push(lyr);
+            }
         });
-        orderMultiMarkers = [];
+        layersToRemove.forEach((lyr) => {
+            try { mapSystem.removeLayer(lyr); } catch (e) {}
+        });
     }
+
     const btnClear = document.getElementById('btn-clear-route');
     if (btnClear) btnClear.classList.add('hidden-state');
 }
 
-export async function gambarRutePesananOSRM(tiket) {
+export async function gambarRutePesananOSRM(tiket, idTiketOpsional = null) {
     if (!mapSystem || !tiket) return;
-    bersihkanRutePesanan();
+
+    const ticketKey = idTiketOpsional || tiket.idTiket || activeRouteTicketId || null;
+    if (ticketKey) {
+        activeRouteTicketId = ticketKey;
+    }
+
+    // Bersihkan rute lama & batalkan fetch OSRM sebelumnya sebelum memulai gambar baru
+    bersihkanRutePesanan(false);
+
+    const currentToken = ++routeRenderToken;
+    const grupRute = pastikanOrderRouteGroup();
+    if (!grupRute) return;
 
     const pickup = parseKoordinatTiket(tiket.pickup_coord);
     let dropoff = parseKoordinatTiket(tiket.dropoff_coord);
@@ -240,7 +304,6 @@ export async function gambarRutePesananOSRM(tiket) {
     }
 
     // Pisahkan titik singgah antara (intermediate stops) dan titik tujuan akhir (final dropoff)
-    // agar tidak terjadi duplikasi marker atau duplikasi segmen OSRM!
     const intermediateStops = [];
     if (Array.isArray(tiket.multi_dropoffs) && tiket.multi_dropoffs.length > 1) {
         const validMulti = tiket.multi_dropoffs.filter(pt => parseKoordinatTiket(pt) !== null);
@@ -265,16 +328,17 @@ export async function gambarRutePesananOSRM(tiket) {
     intermediateStops.forEach(st => waypoints.push({ lat: st.lat, lng: st.lng }));
     if (dropoff) waypoints.push(dropoff);
 
-    // Pasang Marker Jemput, Multi-Stop (Titik Singgah), & Tujuan Akhir
+    // Pasang Marker Jemput, Multi-Stop (Titik Singgah), & Tujuan Akhir ke dalam orderRouteGroup
     const pickupIcon = L.divIcon({
         className: 'bgt-route-pin-pickup',
         html: `<div style="background:#10b981; color:#030712; width:30px; height:30px; border-radius:50%; border:2px solid #ffffff; display:flex; align-items:center; justify-content:center; font-weight:900; box-shadow:0 4px 12px rgba(16,185,129,0.7);"><i class="fa-solid fa-person-hail"></i></div>`,
         iconSize: [30, 30],
         iconAnchor: [15, 15]
     });
-    orderPickupMarker = L.marker([pickup.lat, pickup.lng], { icon: pickupIcon })
-        .bindPopup(`<b>Titik Jemput:</b><br>${String(tiket.pickup_alamat || 'Lokasi Penumpang')}`)
-        .addTo(mapSystem);
+    orderPickupMarker = tandaiLayerOrder(
+        L.marker([pickup.lat, pickup.lng], { icon: pickupIcon })
+            .bindPopup(`<b>Titik Jemput:</b><br>${String(tiket.pickup_alamat || 'Lokasi Penumpang')}`)
+    ).addTo(grupRute);
 
     intermediateStops.forEach((st, idx) => {
         const stopIcon = L.divIcon({
@@ -283,9 +347,10 @@ export async function gambarRutePesananOSRM(tiket) {
             iconSize: [26, 26],
             iconAnchor: [13, 13]
         });
-        const m = L.marker([st.lat, st.lng], { icon: stopIcon })
-            .bindPopup(`<b>Pemberhentian ${idx + 1}:</b><br>${String(st.name || 'Titik Singgah')}`)
-            .addTo(mapSystem);
+        const m = tandaiLayerOrder(
+            L.marker([st.lat, st.lng], { icon: stopIcon })
+                .bindPopup(`<b>Pemberhentian ${idx + 1}:</b><br>${String(st.name || 'Titik Singgah')}`)
+        ).addTo(grupRute);
         orderMultiMarkers.push(m);
     });
 
@@ -296,11 +361,13 @@ export async function gambarRutePesananOSRM(tiket) {
             iconSize: [30, 30],
             iconAnchor: [15, 15]
         });
-        orderDropoffMarker = L.marker([dropoff.lat, dropoff.lng], { icon: dropoffIcon })
-            .bindPopup(`<b>Titik Tujuan Akhir:</b><br>${String(tiket.dropoff_alamat || 'Tujuan Penumpang')}`)
-            .addTo(mapSystem);
+        orderDropoffMarker = tandaiLayerOrder(
+            L.marker([dropoff.lat, dropoff.lng], { icon: dropoffIcon })
+                .bindPopup(`<b>Titik Tujuan Akhir:</b><br>${String(tiket.dropoff_alamat || 'Tujuan Penumpang')}`)
+        ).addTo(grupRute);
     }
 
+    window.__BGT_HAS_ACTIVE_ROUTE = true;
     const btnClear = document.getElementById('btn-clear-route');
     if (btnClear) btnClear.classList.remove('hidden-state');
 
@@ -313,38 +380,59 @@ export async function gambarRutePesananOSRM(tiket) {
     const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordQuery}?overview=full&geometries=geojson`;
 
     try {
-        const ctrl = new AbortController();
-        const tId = setTimeout(() => ctrl.abort(), 5000);
-        const res = await fetch(osrmUrl, { signal: ctrl.signal });
+        osrmRouteAbortController = new AbortController();
+        const tId = setTimeout(() => {
+            if (osrmRouteAbortController) osrmRouteAbortController.abort();
+        }, 5000);
+        const res = await fetch(osrmUrl, { signal: osrmRouteAbortController.signal });
         clearTimeout(tId);
+
+        // Jika selama menunggu fetch ternyata user sudah klik "Bersihkan Rute" atau ada rute baru, hentikan!
+        if (currentToken !== routeRenderToken || !window.__BGT_HAS_ACTIVE_ROUTE) return;
+
         const data = await res.json();
+        if (currentToken !== routeRenderToken || !window.__BGT_HAS_ACTIVE_ROUTE) return;
 
         if (data && data.code === 'Ok' && data.routes && data.routes.length > 0) {
             const routeGeoJSON = data.routes[0].geometry;
-            orderRouteLayer = L.geoJSON(routeGeoJSON, {
-                style: {
-                    color: '#10b981',
-                    weight: 6,
-                    opacity: 0.9,
-                    lineCap: 'round',
-                    lineJoin: 'round'
-                }
-            }).addTo(mapSystem);
+            if (orderRouteLayer) {
+                try { grupRute.removeLayer(orderRouteLayer); } catch (e) {}
+            }
+            orderRouteLayer = tandaiLayerOrder(
+                L.geoJSON(routeGeoJSON, {
+                    style: {
+                        color: '#10b981',
+                        weight: 6,
+                        opacity: 0.9,
+                        lineCap: 'round',
+                        lineJoin: 'round'
+                    }
+                })
+            );
+            orderRouteLayer.eachLayer(sub => tandaiLayerOrder(sub));
+            orderRouteLayer.addTo(grupRute);
 
             mapSystem.fitBounds(orderRouteLayer.getBounds(), { padding: [55, 55], maxZoom: 17 });
             return;
         }
     } catch (err) {
-        // Jika OSRM timeout/gagal, gambar garis hubung taktis langsung
+        if (currentToken !== routeRenderToken || !window.__BGT_HAS_ACTIVE_ROUTE) return;
     }
 
+    if (currentToken !== routeRenderToken || !window.__BGT_HAS_ACTIVE_ROUTE) return;
+
     const latLngs = waypoints.map(w => [w.lat, w.lng]);
-    orderRouteLayer = L.polyline(latLngs, {
-        color: '#10b981',
-        weight: 4,
-        dashArray: '8, 8',
-        opacity: 0.85
-    }).addTo(mapSystem);
+    if (orderRouteLayer) {
+        try { grupRute.removeLayer(orderRouteLayer); } catch (e) {}
+    }
+    orderRouteLayer = tandaiLayerOrder(
+        L.polyline(latLngs, {
+            color: '#10b981',
+            weight: 4,
+            dashArray: '8, 8',
+            opacity: 0.85
+        })
+    ).addTo(grupRute);
     mapSystem.fitBounds(orderRouteLayer.getBounds(), { padding: [55, 55], maxZoom: 17 });
 }
 
@@ -439,14 +527,19 @@ function pasangTileLayerHydra(providerIdx = 0) {
 }
 
 // ==========================================================================
-// 1. SARAF NAVIGASI DOM & KAPSUL MIKRO
+// 1. SARAF NAVIGASI DOM & KAPSUL MIKRO (ANTI-MISS DOMCONTENTLOADED)
 // ==========================================================================
 function inisialisasiEventDOM() {
+    if (isDOMInitialized) return;
+    isDOMInitialized = true;
+
     const btnClearRoute = document.getElementById('btn-clear-route');
     if (btnClearRoute) {
-        btnClearRoute.addEventListener('click', () => {
-            bersihkanRutePesanan();
-            if (window.showToast) window.showToast("Garis rute pesanan dibersihkan dari peta.", "info");
+        btnClearRoute.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            bersihkanRutePesanan(true);
+            if (window.showToast) window.showToast("Garis rute pesanan dibersihkan secara real-time.", "info");
         });
     }
 
@@ -590,7 +683,13 @@ function inisialisasiEventDOM() {
         }
     });
 }
-document.addEventListener('DOMContentLoaded', inisialisasiEventDOM);
+
+// Eksekusi langsung jika DOM sudah siap (mencegah bug DOMContentLoaded terlewat pada ES6 module)
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', inisialisasiEventDOM);
+} else {
+    inisialisasiEventDOM();
+}
 
 window.addEventListener('theme-toggled', (e) => {
     isLightModeGlobal = e.detail.isLight;
@@ -670,7 +769,6 @@ function dapatkanIkonMarker(mode) {
 async function periksaResureksiStatus() {
     if (!auth.currentUser) return false;
     try {
-        // Gunakan snapshot RTDB yang sudah ditarik oleh dashboard.js saat boot untuk menghindari GET ganda
         let data = window.__BGT_RTDB_STATUS_BOOT;
         if (data === undefined) {
             const token = await auth.currentUser.getIdToken();
@@ -703,7 +801,6 @@ async function periksaResureksiStatus() {
                 window.__BGT_TELEMETRY_CACHE.targetLat = data.lat; window.__BGT_TELEMETRY_CACHE.targetLng = data.lng;
                 window.dispatchEvent(new CustomEvent('hud-mode-update'));
 
-                // Nyalakan Radar futaqi-ali, Wake-Lock, dan Timer OLED Blackout
                 hidupkanRadar(auth.currentUser.uid);
                 aktifkanWakeLock();
                 bangunkanLayarOLED();
@@ -718,10 +815,10 @@ async function periksaResureksiStatus() {
 }
 
 export async function inisialisasiPeta() {
+    inisialisasiEventDOM();
     if (mapSystem) { mapSystem.invalidateSize(); return; }
     isLightModeGlobal = document.body.classList.contains('theme-light');
 
-    // Gunakan koordinat terakhir di memori lokal atau pusat zona aktif Jawa Timur (bukan Jakarta) agar hemat unduhan tile
     let initViewLat = DEFAULT_ZONE_CENTER.lat;
     let initViewLng = DEFAULT_ZONE_CENTER.lng;
     try {
@@ -733,6 +830,7 @@ export async function inisialisasiPeta() {
     } catch (e) {}
 
     mapSystem = L.map('map', { zoomControl: false, attributionControl: false }).setView([initViewLat, initViewLng], 15);
+    orderRouteGroup = L.layerGroup().addTo(mapSystem);
     pasangTileLayerHydra(0);
 
     const statusResureksi = await periksaResureksiStatus();
@@ -752,7 +850,6 @@ export async function inisialisasiPeta() {
             { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
         );
     } else {
-        // Saat masih Offline, cukup kunci lokasi awal 1x tanpa menyalakan watchPosition terus-menerus
         navigator.geolocation.getCurrentPosition(
             (pos) => {
                 koordinatLokal = pos;
@@ -1030,7 +1127,6 @@ function mulaiModeAktif() {
     window.__BGT_TELEMETRY_CACHE.mode = 'aktif'; window.dispatchEvent(new CustomEvent('hud-mode-update'));
     updateUIState();
 
-    // Nyalakan Radar futaqi-ali & Screen Wake-Lock API
     if (auth.currentUser) hidupkanRadar(auth.currentUser.uid);
     aktifkanWakeLock();
 
@@ -1050,7 +1146,6 @@ function mulaiModeAktif() {
     let waktuTransmisiTerakhir = Date.now();
     let hasSentInitialFullPayload = false;
 
-    // Kirim Payload Penuh 1 kali saat awal mulaiModeAktif() jika koordinat sudah tersedia
     const savedCoord = JSON.parse(localStorage.getItem('bgt_last_coord') || 'null');
     const initLat = koordinatLokal ? koordinatLokal.coords.latitude : (savedCoord ? savedCoord.lat : null);
     const initLng = koordinatLokal ? koordinatLokal.coords.longitude : (savedCoord ? savedCoord.lng : null);
@@ -1082,7 +1177,6 @@ function mulaiModeAktif() {
         const currentLat = koordinatLokal.coords.latitude, currentLng = koordinatLokal.coords.longitude;
         const waktuSekarangEdge = Date.now();
 
-        // Jika saat awal mulaiModeAktif() sinyal GPS belum terkunci, kirim Payload Penuh 1 kali begitu sinyal dikunci
         if (!hasSentInitialFullPayload) {
             await kirimPayloadPenuhRTDB(currentLat, currentLng, 'aktif', null);
             lastCoord = { lat: currentLat, lng: currentLng };
@@ -1106,18 +1200,14 @@ function mulaiModeAktif() {
                 window.dispatchEvent(new CustomEvent('hud-telemetry-haversine', { detail: { jarak: pergeseranJarak } }));
             }
 
-            // SPESIFIKASI 2.1: Adaptive Velocity Throttling
             if (pergeseranJarak < 10) {
-                // Berhenti (< 10m): Tahan pengiriman dan hanya kirim heartbeat setiap 120 detik
                 if (!butuhPacuJantung) return;
                 lowSpeedTicks = 0;
             } else if (pergeseranJarak >= 10 && pergeseranJarak <= 25) {
-                // Kecepatan rendah / macet (10m s/d 25m): Kirim data setiap 2 tik (10 detik)
                 lowSpeedTicks++;
                 if (lowSpeedTicks < 2 && !butuhPacuJantung) return;
                 lowSpeedTicks = 0;
             } else {
-                // Melaju cepat (> 25m): Kirim setiap 1 tik (5 detik)
                 lowSpeedTicks = 0;
             }
         }
@@ -1198,7 +1288,6 @@ function kunciLokasiStandby(durasiJam) {
             window.__BGT_TELEMETRY_CACHE.targetLat = center.lat; window.__BGT_TELEMETRY_CACHE.targetLng = center.lng;
             window.dispatchEvent(new CustomEvent('hud-mode-update'));
 
-            // Nyalakan Radar futaqi-ali, Wake-Lock, dan Timer OLED Blackout (60 detik)
             if (auth.currentUser) hidupkanRadar(auth.currentUser.uid);
             aktifkanWakeLock();
             bangunkanLayarOLED();
@@ -1206,7 +1295,7 @@ function kunciLokasiStandby(durasiJam) {
     });
 }
 
-// SPESIFIKASI 2.1: Payload Penuh (Hanya dipanggil 1x saat mulaiModeAktif, kunciLokasiStandby, atau ops-settings-saved)
+// SPESIFIKASI 2.1: Payload Penuh (Menyertakan fcmToken lokal agar aplikasi Publik 0-Read Firestore saat menembak FCM)
 export async function kirimPayloadPenuhRTDB(lat, lng, mode, expiresAt) {
     if (!auth.currentUser) return false;
     try {
@@ -1220,25 +1309,29 @@ export async function kirimPayloadPenuhRTDB(lat, lng, mode, expiresAt) {
         const strAgenda = String(window.__BGT_AGENDA_INFO || "").substring(0, 150);
         const savedSessionId = String(localStorage.getItem('bgt_session') || `SES_${auth.currentUser.uid.substring(0, 8)}`).substring(0, 40);
         const safeRadius = Math.min(15, Math.max(1, Number(currentRadiusKm) || 7.0));
+        const savedFcmToken = localStorage.getItem('bgt_fcm_token') || "";
+
+        const payloadStatus = {
+            isOnline: true,
+            mode: mode,
+            lat: Number(lat),
+            lng: Number(lng),
+            geohash: bgtGeohash,
+            radius: safeRadius,
+            timestamp: getTrueTime(),
+            expiresAt: expiresAt ? Number(expiresAt) : null,
+            session_id: savedSessionId,
+            armada: strArmada,
+            layanan: strLayanan,
+            tarif_min: numTarif,
+            agenda: strAgenda
+        };
+        if (savedFcmToken) payloadStatus.fcmToken = savedFcmToken;
 
         await fetch(dbUrl, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                isOnline: true,
-                mode: mode,
-                lat: Number(lat),
-                lng: Number(lng),
-                geohash: bgtGeohash,
-                radius: safeRadius,
-                timestamp: getTrueTime(),
-                expiresAt: expiresAt ? Number(expiresAt) : null,
-                session_id: savedSessionId,
-                armada: strArmada,
-                layanan: strLayanan,
-                tarif_min: numTarif,
-                agenda: strAgenda
-            })
+            body: JSON.stringify(payloadStatus)
         });
         return true;
     } catch (error) { return false; }
@@ -1276,7 +1369,6 @@ export async function matikanSinkronisasi(pesan = "") {
     if (btnPower) { btnPower.classList.add('pointer-events-none'); btnPower.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin text-xl"></i>'; }
     if (statusText) statusText.innerHTML = '<span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></span> <span class="text-yellow-400 font-bold tracking-widest">MEMUTUS KONEKSI...</span>';
 
-    // Putus Radar futaqi-ali (goOffline(dbRadar)), lepaskan Wake-Lock, dan matikan OLED Blackout
     matikanRadar();
     lepaskanWakeLock();
     matikanPemantauOLED();
@@ -1285,7 +1377,6 @@ export async function matikanSinkronisasi(pesan = "") {
         try {
             const token = await auth.currentUser.getIdToken();
             const dbUrl = `https://bagantara-core-default-rtdb.asia-southeast1.firebasedatabase.app/drivers/${auth.currentUser.uid}/status.json?auth=${token}`;
-            // Set geohash: 'OFFLINE' agar driver yang sedang offline tidak ikut terunduh saat aplikasi publik memindai geohash aktif
             await fetch(dbUrl, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
